@@ -1,0 +1,226 @@
+# bff-spec.yaml
+# Full example showing:
+#   - Query with parallel fan-out (no deps between steps)
+#   - Mutation with sequential chain + parallel tail
+#   - jq output mappings (nested, arrays, conditionals)
+#   - Critical steps that abort the chain on failure
+#   - Optional steps conditioned on args
+#   - Transformer function reference
+
+# Optional top-level input types (for mutation args)
+input_types:
+  - name: LineItemInput
+    fields:
+      sku:      String!
+      quantity: Int!
+      price:    Float!
+
+endpoints:
+  - name: userDashboard
+    type: query
+    description: "Fetch user dashboard — profile, preferences and recent activity"
+
+    args:
+      userId:          { type: String! }
+      includeActivity: { type: Boolean, default: false }
+
+    output_type:
+      name: UserDashboard
+      fields:
+        userId:          String!
+        fullName:        String!
+        email:           String!
+        avatarUrl:       String
+        theme:           String
+        language:        String
+        activityCount:   Int
+        recentTitles:    "[String]"
+        verifiedLabel:   String
+
+    backend_chain:
+
+      - id: fetch_profile
+        url: "http://localhost:3001/api/v1/users/{userId}"
+        method: GET
+        deps: []
+        critical: true                   # abort if this fails
+        input_mapping:
+          userId:
+            source: args
+            key: userId
+        cache:                                                                                                        
+          key: "profile:{userId}"  
+
+      - id: fetch_preferences
+        url: "http://localhost:3001/api/v1/preferences/{userId}"
+        method: GET
+        deps: []                         # no deps → parallel with fetch_profile
+        input_mapping:
+          userId:
+            source: args
+            key: userId
+
+      - id: fetch_activity
+        url: "http://localhost:3001/api/v1/activity"
+        method: GET
+        deps: [fetch_profile]            # needs profile.internal_id
+        condition:
+          source: args
+          key: includeActivity
+        input_mapping:
+          user_id:
+            source: step
+            step_id: fetch_profile
+            jq: ".data.internal_id"
+          limit:
+            value: 10
+
+    output_mapping:
+      userId:
+        source: step
+        step_id: fetch_profile
+        jq: ".data.id"
+      fullName:
+        source: step
+        step_id: fetch_profile
+        jq: ".data.profile.first_name + \" \" + .data.profile.last_name"
+      email:
+        source: step
+        step_id: fetch_profile
+        jq: ".data.contact.emails[0].address"
+      avatarUrl:
+        source: step
+        step_id: fetch_profile
+        jq: ".data.profile.avatar.url // null"
+      theme:
+        source: step
+        step_id: fetch_preferences
+        jq: ".data.ui.theme // \"light\""
+      language:
+        source: step
+        step_id: fetch_preferences
+        jq: ".data.locale.language"
+      activityCount:
+        source: step
+        step_id: fetch_activity
+        jq: ".data.pagination.total // 0"
+      recentTitles:
+        source: step
+        step_id: fetch_activity
+        jq: "[.data.items[].title]"
+      verifiedLabel:
+        source: step
+        step_id: fetch_profile
+        jq: "if .data.verified then \"✓ Verified\" else null end"
+
+    transformer:
+      ns: bff.examples.transformers.user
+      fn: enrich-dashboard
+
+# mutation
+  - name: createOrder
+    type: mutation
+    description: "Create an order then notify user and reserve inventory in parallel"
+
+    args:
+      userId:   { type: String! }
+      items:    { type: "[LineItemInput!]!" }
+      priority: { type: String, default: "normal" }
+
+    output_type:
+      name: OrderResult
+      fields:
+        orderId:           String!
+        status:            String!
+        totalAmount:       Float!
+        estimatedDelivery: String
+        notificationSent:  Boolean
+        inventoryReserved: Boolean
+        warnings:          "[String]"
+
+    backend_chain:
+
+      - id: create_order
+        url: "http://localhost:3001/api/v1/orders"
+        method: POST
+        deps: []
+        critical: true                  # if order creation fails, stop everything
+        body_mapping:
+          user_id:
+            source: args
+            key: userId
+          line_items:
+            source: args
+            key: items
+          priority:
+            source: args
+            key: priority
+
+      - id: notify_user
+        url: "http://localhost:3001/api/v1/notify"
+        method: POST
+        deps: [create_order]
+        critical: false                 # notification failure is non-fatal
+        body_mapping:
+          order_id:
+            source: step
+            step_id: create_order
+            jq: ".id"
+          user_id:
+            source: args
+            key: userId
+          template:
+            value: "order_confirmation"
+          amount:
+            source: step
+            step_id: create_order
+            jq: ".total_amount"
+
+      - id: update_inventory
+        url: "http://localhost:3001/api/v1/reserve"
+        method: POST
+        deps: [create_order]
+        critical: false
+        body_mapping:
+          order_id:
+            source: step
+            step_id: create_order
+            jq: ".id"
+          skus:
+            source: step
+            step_id: create_order
+            jq: "[.line_items[].sku]"
+          quantities:
+            source: step
+            step_id: create_order
+            jq: "[.line_items[].quantity]"
+
+    output_mapping:
+      orderId:
+        source: step
+        step_id: create_order
+        jq: ".id"
+      status:
+        source: step
+        step_id: create_order
+        jq: ".status"
+      totalAmount:
+        source: step
+        step_id: create_order
+        jq: ".total_amount"
+      estimatedDelivery:
+        source: step
+        step_id: create_order
+        jq: ".estimated_delivery_date // null"
+      notificationSent:
+        source: step
+        step_id: notify_user
+        jq: ".success // false"
+      inventoryReserved:
+        source: step
+        step_id: update_inventory
+        jq: ".reserved // false"
+
+    transformer:
+      ns: bff.examples.transformers.orders
+      fn: attach-warnings

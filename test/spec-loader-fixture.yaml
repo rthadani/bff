@@ -1,0 +1,87 @@
+# Minimal spec fixture for spec-loader tests.
+# Covers all mapping types: input_mapping, body_mapping, output_mapping,
+# with and without jq expressions, across both query and mutation endpoints.
+
+endpoints:
+
+  - name: getUser
+    type: query
+    args:
+      userId: { type: String! }
+    output_type:
+      name: User
+      fields:
+        id:    String!
+        name:  String
+    backend_chain:
+
+      # Step with a plain (non-jq) input_mapping
+      - id: fetch_user
+        url: "https://api.example.com/users/{userId}"
+        method: GET
+        deps: []
+        critical: true
+        input_mapping:
+          userId:
+            source: args
+            key:    userId
+
+      # Step with a jq input_mapping (depends on fetch_user)
+      - id: fetch_profile
+        url: "https://api.example.com/profile"
+        method: GET
+        deps: [fetch_user]
+        input_mapping:
+          internal_id:
+            source:  step
+            step_id: fetch_user
+            jq:      ".data.internal_id"
+
+    # output_mapping: one jq entry, one plain entry
+    output_mapping:
+      id:
+        source:  step
+        step_id: fetch_user
+        jq:      ".data.id"
+      name:
+        source:  step
+        step_id: fetch_user
+        key:     name
+
+  - name: createOrder
+    type: mutation
+    args:
+      userId: { type: String! }
+    output_type:
+      name: OrderResult
+      fields:
+        orderId: String!
+    backend_chain:
+
+      # Step with a plain body_mapping
+      - id: create_order
+        url: "https://api.example.com/orders"
+        method: POST
+        deps: []
+        critical: true
+        body_mapping:
+          user_id:
+            source: args
+            key:    userId
+
+      # Step with a jq body_mapping
+      - id: notify_user
+        url: "https://api.example.com/notify"
+        method: POST
+        deps: [create_order]
+        body_mapping:
+          order_id:
+            source:  step
+            step_id: create_order
+            jq:      ".data.id"
+
+    output_mapping:
+      orderId:
+        source:  step
+        step_id: create_order
+        jq:      ".data.order_id"

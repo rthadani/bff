@@ -27,6 +27,20 @@
      :backend_chain []
      :output_mapping {}}]})
 
+(def ^:private nested-spec
+  {:endpoints
+   [{:name "getItem"
+     :type "query"
+     :args {}
+     :output_type {:name "Item"
+                   :fields {:meta  {:name "ItemMeta"
+                                    :fields {:title "String!" :count "Int"}}
+                            :stats {:name "ItemStats"
+                                    :fields {:views "Int" :rating "Float"}}
+                            :value "String"}}
+     :backend_chain []
+     :output_mapping {}}]})
+
 (def ^:private full-spec
   {:endpoints
    [{:name        "getUser"
@@ -106,6 +120,34 @@
         names  (->> (get-in result [:data :__type :fields]) (map :name) set)]
     (is (contains? names "id"))
     (is (contains? names "name"))))
+
+;; ---------------------------------------------------------------------------
+;; Nested object types
+;; ---------------------------------------------------------------------------
+
+(deftest test-nested-type-is-registered
+  (let [result (exec (sb/build-schema nested-spec) "{ __type(name: \"ItemMeta\") { name kind } }")]
+    (is (= "ItemMeta" (get-in result [:data :__type :name])))
+    (is (= :OBJECT (get-in result [:data :__type :kind])))))
+
+(deftest test-nested-types-all-registered
+  (let [schema (sb/build-schema nested-spec)]
+    (doseq [type-name ["Item" "ItemMeta" "ItemStats"]]
+      (let [result (exec schema (str "{ __type(name: \"" type-name "\") { kind } }"))]
+        (is (= :OBJECT (get-in result [:data :__type :kind]))
+            (str type-name " should be registered"))))))
+
+(deftest test-parent-field-references-nested-type
+  (let [schema (sb/build-schema nested-spec)
+        fields (type-fields schema "Item")
+        meta   (get fields "meta")]
+    (is (= "ItemMeta" (:name meta)))))
+
+(deftest test-nested-type-has-its-own-fields
+  (let [schema (sb/build-schema nested-spec)
+        fields (type-fields schema "ItemMeta")]
+    (is (contains? (set (keys fields)) "title"))
+    (is (contains? (set (keys fields)) "count"))))
 
 ;; ---------------------------------------------------------------------------
 ;; Input types

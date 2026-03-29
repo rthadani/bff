@@ -129,7 +129,9 @@
   [output-mapping args chain-ctx request-ctx]
   (->> output-mapping
        (map (fn [[field mapping]]
-              [field (resolve-value mapping args chain-ctx request-ctx)]))
+              [field (if (:source mapping)
+                       (resolve-value mapping args chain-ctx request-ctx)
+                       (apply-output-mapping mapping args chain-ctx request-ctx))]))
        (into {})))
 
 

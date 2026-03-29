@@ -27,6 +27,10 @@
       :else
       (symbol t))))
 
+(defn- nested-type?
+  [v]
+  (and (map? v) (contains? v :name) (contains? v :fields)))
+
 (defn- build-object-type
   [output-type-spec]
   {(keyword (:name output-type-spec))
@@ -35,8 +39,19 @@
     (->> (:fields output-type-spec)
          (map (fn [[k v]]
                 [(keyword k)
-                 {:type (parse-type-str (if (map? v) (:type v) v))}]))
+                 (if (nested-type? v)
+                   {:type (keyword (:name v))}
+                   {:type (parse-type-str (if (map? v) (:type v) v))})]))
          (into {}))}})
+
+(defn- collect-object-types
+  [output-type-spec]
+  (apply merge
+    (build-object-type output-type-spec)
+    (->> (:fields output-type-spec)
+         vals
+         (filter nested-type?)
+         (map collect-object-types))))
 
 (defn- build-input-type
   [input-type-spec]
@@ -92,7 +107,7 @@
         mutations (filter #(= (:type %) "mutation") endpoints)
 
         objects   (->> endpoints
-                       (map #(build-object-type (:output_type %)))
+                       (map #(collect-object-types (:output_type %)))
                        (apply merge))
 
         input-objs (->> (get spec :input_types [])

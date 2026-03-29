@@ -127,6 +127,30 @@
       (is (= 1 (count (:endpoints (loader/compile-spec spec))))))))
 
 
+(deftest test-compile-spec-nested-output-mapping-jq-compiled
+  (testing "jq entries nested inside an output_mapping sub-object are compiled"
+    (let [spec {:endpoints
+                [{:name "x" :type "query"
+                  :backend_chain []
+                  :output_mapping
+                  {:group {:id   {:source "step" :step_id "s" :jq ".data.id"}
+                           :name {:source "step" :step_id "s" :key "name"}}}}]}
+          endpoint (first (:endpoints (loader/compile-spec spec)))
+          id-mapping (get-in endpoint [:output_mapping :group :id])]
+      (is (contains? id-mapping :compiled-jq))
+      (is (instance? net.thisptr.jackson.jq.JsonQuery (:compiled-jq id-mapping))))))
+
+(deftest test-compile-spec-nested-output-mapping-plain-unchanged
+  (testing "non-jq entries inside a nested output_mapping sub-object are not compiled"
+    (let [spec {:endpoints
+                [{:name "x" :type "query"
+                  :backend_chain []
+                  :output_mapping
+                  {:group {:name {:source "step" :step_id "s" :key "name"}}}}]}
+          endpoint (first (:endpoints (loader/compile-spec spec)))
+          name-mapping (get-in endpoint [:output_mapping :group :name])]
+      (is (not (contains? name-mapping :compiled-jq))))))
+
 (deftest test-load-spec-throws-on-missing-resource
   (testing "load-spec throws ExceptionInfo when the resource is not found"
     (is (thrown? clojure.lang.ExceptionInfo

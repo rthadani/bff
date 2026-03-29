@@ -10,8 +10,9 @@
   [_args _chain-ctx output]
   (cond-> output
     ;; Normalize fullName to title case
-    (:fullName output)
-    (update :fullName
+    
+    (get-in output [:profile :fullName ])
+    (update-in  [:profile :fullName]
             (fn [n]
               (->> (str/split n #"\s+")
                    (map str/capitalize)

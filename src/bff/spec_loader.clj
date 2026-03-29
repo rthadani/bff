@@ -21,6 +21,15 @@
          (map (fn [[k v]] [k (compile-mapping-entry v)]))
          (into {}))))
 
+(defn- compile-output-map [output-map]
+  (when output-map
+    (->> output-map
+         (map (fn [[k v]]
+                [k (if (:source v)
+                     (compile-mapping-entry v)
+                     (compile-output-map v))]))
+         (into {}))))
+
 (defn- compile-step [step]
   (-> step
       (update :input_mapping compile-param-map)
@@ -34,7 +43,7 @@
   (preload-transformer! (:transformer endpoint))
   (-> endpoint
       (update :backend_chain #(mapv compile-step %))
-      (update :output_mapping compile-param-map)))
+      (update :output_mapping compile-output-map)))
 
 (defn compile-spec
   [spec]

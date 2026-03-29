@@ -218,3 +218,27 @@
     (let [endpoint (assoc base-endpoint :output_mapping {:v {:source "value" :value 42}})
           {:keys [data]} (run-sync! (executor/run-endpoint endpoint {} {}))]
       (is (= 42 (:v data))))))
+
+(deftest test-run-endpoint-nested-output-mapping
+  (with-redefs [http/call (fn [_] (http/ok {:name "Bob" :city "NY"}))]
+    (let [endpoint (assoc base-endpoint
+                          :output_mapping
+                          {:profile {:name     {:source "step" :step_id "s" :key "name"}
+                                     :location {:city {:source "step" :step_id "s" :key "city"}}}})
+          {:keys [data]} (run-sync! (executor/run-endpoint endpoint {} {}))]
+      (is (= "Bob" (get-in data [:profile :name])))
+      (is (= "NY"  (get-in data [:profile :location :city]))))))
+
+(deftest test-run-endpoint-nested-output-mapping-with-jq
+  (with-redefs [http/call (fn [_] (http/ok {:user {:id "u1" :score 99}}))]
+    (let [endpoint (assoc base-endpoint
+                          :output_mapping
+                          {:summary {:userId {:source "step" :step_id "s"
+                                              :jq ".user.id"
+                                              :compiled-jq (jq/compile-query ".user.id")}
+                                     :score  {:source "step" :step_id "s"
+                                              :jq ".user.score"
+                                              :compiled-jq (jq/compile-query ".user.score")}}})
+          {:keys [data]} (run-sync! (executor/run-endpoint endpoint {} {}))]
+      (is (= "u1" (get-in data [:summary :userId])))
+      (is (= 99   (get-in data [:summary :score]))))))

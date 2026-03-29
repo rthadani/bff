@@ -27,15 +27,21 @@ endpoints:
     output_type:
       name: UserDashboard
       fields:
-        userId:          String!
-        fullName:        String!
-        email:           String!
-        avatarUrl:       String
-        theme:           String
-        language:        String
+        profile:
+          name: UserProfile
+          fields:
+            userId:       String!
+            fullName:     String!
+            email:        String!
+            avatarUrl:    String
+            verifiedLabel: String
+        preferences:
+          name: UserPreferences
+          fields:
+            theme:        String
+            language:     String
         activityCount:   Int
         recentTitles:    "[String]"
-        verifiedLabel:   String
 
     backend_chain:
 
@@ -76,30 +82,36 @@ endpoints:
             value: 10
 
     output_mapping:
-      userId:
-        source: step
-        step_id: fetch_profile
-        jq: ".data.id"
-      fullName:
-        source: step
-        step_id: fetch_profile
-        jq: ".data.profile.first_name + \" \" + .data.profile.last_name"
-      email:
-        source: step
-        step_id: fetch_profile
-        jq: ".data.contact.emails[0].address"
-      avatarUrl:
-        source: step
-        step_id: fetch_profile
-        jq: ".data.profile.avatar.url // null"
-      theme:
-        source: step
-        step_id: fetch_preferences
-        jq: ".data.ui.theme // \"light\""
-      language:
-        source: step
-        step_id: fetch_preferences
-        jq: ".data.locale.language"
+      profile:
+        userId:
+          source: step
+          step_id: fetch_profile
+          jq: ".data.id"
+        fullName:
+          source: step
+          step_id: fetch_profile
+          jq: ".data.profile.first_name + \" \" + .data.profile.last_name"
+        email:
+          source: step
+          step_id: fetch_profile
+          jq: ".data.contact.emails[0].address"
+        avatarUrl:
+          source: step
+          step_id: fetch_profile
+          jq: ".data.profile.avatar.url // null"
+        verifiedLabel:
+          source: step
+          step_id: fetch_profile
+          jq: "if .data.verified then \"✓ Verified\" else null end"
+      preferences:
+        theme:
+          source: step
+          step_id: fetch_preferences
+          jq: ".data.ui.theme // \"light\""
+        language:
+          source: step
+          step_id: fetch_preferences
+          jq: ".data.locale.language"
       activityCount:
         source: step
         step_id: fetch_activity
@@ -108,10 +120,6 @@ endpoints:
         source: step
         step_id: fetch_activity
         jq: "[.data.items[].title]"
-      verifiedLabel:
-        source: step
-        step_id: fetch_profile
-        jq: "if .data.verified then \"✓ Verified\" else null end"
 
     transformer:
       ns: bff.examples.transformers.user

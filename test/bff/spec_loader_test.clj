@@ -151,6 +151,61 @@
           name-mapping (get-in endpoint [:output_mapping :group :name])]
       (is (not (contains? name-mapping :compiled-jq))))))
 
+;; ---------------------------------------------------------------------------
+;; Directory loading
+;; ---------------------------------------------------------------------------
+
+(deftest test-load-and-compile-dir-merges-endpoints
+  (testing "directory path merges all YAML files into a single spec"
+    (let [spec (loader/load-and-compile "multi-spec/")]
+      (is (= 2 (count (:endpoints spec)))))))
+
+(deftest test-load-and-compile-dir-endpoint-names
+  (testing "all endpoint names from the directory are present"
+    (let [names (->> (loader/load-and-compile "multi-spec/")
+                     :endpoints
+                     (map :name)
+                     set)]
+      (is (= #{"getUser" "createOrder"} names)))))
+
+(deftest test-load-and-compile-dir-merges-input-types
+  (testing "input_types from all files in the directory are merged"
+    (let [spec (loader/load-and-compile "multi-spec/")]
+      (is (= 1 (count (:input_types spec))))
+      (is (= "OrderInput" (-> spec :input_types first :name))))))
+
+(deftest test-load-and-compile-dir-jq-compiled
+  (testing "jq expressions in directory-loaded specs are compiled"
+    (let [endpoint (->> (loader/load-and-compile "multi-spec/")
+                        :endpoints
+                        (filter #(= "getUser" (:name %)))
+                        first)
+          mapping  (:id (:output_mapping endpoint))]
+      (is (contains? mapping :compiled-jq))
+      (is (instance? net.thisptr.jackson.jq.JsonQuery (:compiled-jq mapping))))))
+
+(deftest test-load-and-compile-dir-missing-throws
+  (testing "directory path with no YAML files throws ExceptionInfo"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (loader/load-and-compile "no-such-dir/")))))
+
+;; ---------------------------------------------------------------------------
+;; Collection of paths
+;; ---------------------------------------------------------------------------
+
+(deftest test-load-and-compile-collection-merges-endpoints
+  (testing "a vector of paths merges all named files"
+    (let [spec (loader/load-and-compile ["multi-spec/users.yaml"
+                                         "multi-spec/orders.yaml"])]
+      (is (= 2 (count (:endpoints spec)))))))
+
+(deftest test-load-and-compile-collection-jq-compiled
+  (testing "jq expressions in collection-loaded specs are compiled"
+    (let [endpoint (->> (loader/load-and-compile ["multi-spec/users.yaml"])
+                        :endpoints first)
+          mapping  (:id (:output_mapping endpoint))]
+      (is (contains? mapping :compiled-jq)))))
+
 (deftest test-load-spec-throws-on-missing-resource
   (testing "load-spec throws ExceptionInfo when the resource is not found"
     (is (thrown? clojure.lang.ExceptionInfo

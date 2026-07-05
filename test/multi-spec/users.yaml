@@ -1,0 +1,24 @@
+endpoints:
+  - name: getUser
+    type: query
+    args:
+      userId: { type: String! }
+    output_type:
+      name: UserResult
+      fields:
+        id:   String!
+        name: String
+    backend_chain:
+      - id: fetch_user
+        url: "https://api.example.com/users/{userId}"
+        method: GET
+        deps: []
+    output_mapping:
+      id:
+        source: step
+        step_id: fetch_user
+        jq: ".data.id"
+      name:
+        source: step
+        step_id: fetch_user
+        key: name

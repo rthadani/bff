@@ -152,6 +152,92 @@
       (is (not (contains? name-mapping :compiled-jq))))))
 
 ;; ---------------------------------------------------------------------------
+;; Environment variable substitution
+;; BFF_TEST_UNSET_XYZ123 stands in for any variable that is not set.
+;; ---------------------------------------------------------------------------
+
+(def ^:private resolve-env-vars #'loader/resolve-env-vars)
+
+(deftest test-env-vars-plain-string-unchanged
+  (testing "strings without a substitution pattern are returned as-is"
+    (is (= "http://localhost:8080" (resolve-env-vars "http://localhost:8080")))))
+
+(deftest test-env-vars-default-used-when-unset
+  (testing "${VAR:-default} uses the default when the variable is not set"
+    (is (= "http://localhost:3001"
+           (resolve-env-vars "${BFF_TEST_UNSET_XYZ123:-http://localhost:3001}")))))
+
+(deftest test-env-vars-default-embedded-in-url
+  (testing "default substitution works mid-string"
+    (is (= "http://localhost:3001/api/v1/users"
+           (resolve-env-vars "${BFF_TEST_UNSET_XYZ123:-http://localhost:3001}/api/v1/users")))))
+
+(deftest test-env-vars-set-var-is-substituted
+  (testing "a set environment variable is substituted into the string"
+    (let [path (System/getenv "PATH")]
+      (when path
+        (is (= (str "prefix:" path) (resolve-env-vars "prefix:${PATH}")))))))
+
+(deftest test-env-vars-missing-var-throws
+  (testing "unset variable with no default throws"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (resolve-env-vars "${BFF_TEST_UNSET_XYZ123}")))))
+
+(deftest test-env-vars-missing-var-ex-data-names-variable
+  (testing "the thrown ExceptionInfo names the missing variable"
+    (try
+      (resolve-env-vars "${BFF_TEST_UNSET_XYZ123}")
+      (is false "should have thrown")
+      (catch clojure.lang.ExceptionInfo e
+        (is (= "BFF_TEST_UNSET_XYZ123" (:variable (ex-data e))))))))
+
+(deftest test-env-vars-recursive-in-map
+  (testing "substitution recurses into map values"
+    (is (= {:url "http://localhost:3001/api"}
+           (resolve-env-vars {:url "${BFF_TEST_UNSET_XYZ123:-http://localhost:3001}/api"})))))
+
+(deftest test-env-vars-recursive-in-vector
+  (testing "substitution recurses into vectors"
+    (is (= ["authorization" "x-tenant-id"]
+           (resolve-env-vars ["${BFF_TEST_UNSET_XYZ123:-authorization}" "x-tenant-id"])))))
+
+(deftest test-env-vars-non-string-values-unchanged
+  (testing "non-string values pass through unchanged"
+    (is (= {:count 42 :flag true :nothing nil}
+           (resolve-env-vars {:count 42 :flag true :nothing nil})))))
+
+;; ---------------------------------------------------------------------------
+;; forward_headers merging
+;; ---------------------------------------------------------------------------
+
+(def ^:private merge-specs #'loader/merge-specs)
+
+(deftest test-merge-specs-collects-forward-headers
+  (testing "forward_headers from multiple specs are combined"
+    (let [merged (merge-specs [{:forward_headers ["authorization" "x-request-id"] :endpoints []}
+                                {:forward_headers ["x-tenant-id"] :endpoints []}])]
+      (is (= #{"authorization" "x-request-id" "x-tenant-id"}
+             (set (:forward_headers merged)))))))
+
+(deftest test-merge-specs-deduplicates-forward-headers
+  (testing "duplicate header names across specs appear only once"
+    (let [merged (merge-specs [{:forward_headers ["authorization"] :endpoints []}
+                                {:forward_headers ["authorization"] :endpoints []}])]
+      (is (= 1 (count (:forward_headers merged)))))))
+
+(deftest test-merge-specs-empty-forward-headers
+  (testing "specs without forward_headers yield an empty list"
+    (let [merged (merge-specs [{:endpoints []}
+                                {:endpoints []}])]
+      (is (empty? (:forward_headers merged))))))
+
+(deftest test-compile-spec-preserves-forward-headers
+  (testing "compile-spec passes forward_headers through unchanged"
+    (let [spec {:forward_headers ["authorization" "x-tenant-id"] :endpoints []}]
+      (is (= ["authorization" "x-tenant-id"]
+             (:forward_headers (loader/compile-spec spec)))))))
+
+;; ---------------------------------------------------------------------------
 ;; Directory loading
 ;; ---------------------------------------------------------------------------
 

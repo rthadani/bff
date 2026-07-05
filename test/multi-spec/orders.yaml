@@ -1,0 +1,30 @@
+input_types:
+  - name: OrderInput
+    fields:
+      userId: String!
+      sku:    String!
+
+endpoints:
+  - name: createOrder
+    type: mutation
+    args:
+      input: { type: OrderInput! }
+    output_type:
+      name: OrderResult
+      fields:
+        orderId: String!
+        status:  String
+    backend_chain:
+      - id: create_order
+        url: "https://api.example.com/orders"
+        method: POST
+        deps: []
+    output_mapping:
+      orderId:
+        source: step
+        step_id: create_order
+        jq: ".data.id"
+      status:
+        source: step
+        step_id: create_order
+        key: status

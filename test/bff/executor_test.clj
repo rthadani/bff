@@ -167,6 +167,59 @@
       (is (empty? errors)))))
 
 ;; ---------------------------------------------------------------------------
+;; Request context header forwarding
+;; ---------------------------------------------------------------------------
+
+(deftest test-request-ctx-headers-forwarded-to-backend
+  (testing "keys in request-ctx are forwarded as headers to backend calls"
+    (let [captured (atom nil)]
+      (with-redefs [http/call (fn [{:keys [headers]}]
+                                (reset! captured headers)
+                                (http/ok {}))]
+        (run-sync! (executor/execute-graph [(assoc base-step :id "s")]
+                                           {}
+                                           {:authorization "Bearer tok"
+                                            :x-tenant-id  "tenant-1"}))
+        (is (= "Bearer tok" (get @captured "authorization")))
+        (is (= "tenant-1"   (get @captured "x-tenant-id")))))))
+
+(deftest test-remote-addr-forwarded-to-backend
+  (testing "remote-addr from request-ctx is forwarded as a header"
+    (let [captured (atom nil)]
+      (with-redefs [http/call (fn [{:keys [headers]}]
+                                (reset! captured headers)
+                                (http/ok {}))]
+        (run-sync! (executor/execute-graph [(assoc base-step :id "s")]
+                                           {}
+                                           {:remote-addr "1.2.3.4"}))
+        (is (= "1.2.3.4" (get @captured "remote-addr")))))))
+
+(deftest test-nil-ctx-values-not-forwarded-as-headers
+  (testing "nil ctx values are dropped before forwarding"
+    (let [captured (atom nil)]
+      (with-redefs [http/call (fn [{:keys [headers]}]
+                                (reset! captured headers)
+                                (http/ok {}))]
+        (run-sync! (executor/execute-graph [(assoc base-step :id "s")]
+                                           {}
+                                           {:authorization nil :x-tenant-id "t1"}))
+        (is (not (contains? @captured "authorization")))
+        (is (= "t1" (get @captured "x-tenant-id")))))))
+
+(deftest test-step-extra-headers-merged-with-ctx-headers
+  (testing "extra_headers on a step are merged with forwarded request-ctx headers"
+    (let [captured (atom nil)]
+      (with-redefs [http/call (fn [{:keys [headers]}]
+                                (reset! captured headers)
+                                (http/ok {}))]
+        (run-sync! (executor/execute-graph [(assoc base-step :id "s"
+                                                   :extra_headers {"x-service-key" "secret"})]
+                                           {}
+                                           {:authorization "Bearer tok"}))
+        (is (= "Bearer tok" (get @captured "authorization")))
+        (is (= "secret"     (get @captured "x-service-key")))))))
+
+;; ---------------------------------------------------------------------------
 ;; register-transformer! / transformer dispatch
 ;; ---------------------------------------------------------------------------
 
@@ -212,6 +265,16 @@
                           :transformer {:ns "bff.executor-test" :fn "test-transformer-fn"})
           {:keys [data]} (run-sync! (executor/run-endpoint endpoint {} {}))]
       (is (true? (:via-ns data))))))
+
+(deftest test-transformer-protocol-implementation
+  (testing "a protocol implementation works as a transformer"
+    (let [impl (reify executor/BffTransformer
+                 (transform [_ _ _ m] (assoc m :via-protocol true)))]
+      (executor/register-transformer! "test-protocol-impl" impl)
+      (with-redefs [http/call (fn [_] (http/ok {}))]
+        (let [endpoint (assoc base-endpoint :transformer {:key "test-protocol-impl"})
+              {:keys [data]} (run-sync! (executor/run-endpoint endpoint {} {}))]
+          (is (true? (:via-protocol data))))))))
 
 (deftest test-no-transformer-returns-mapped-output-unchanged
   (with-redefs [http/call (fn [_] (http/ok {}))]

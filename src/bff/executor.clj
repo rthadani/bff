@@ -63,9 +63,7 @@
         method    (keyword (str/lower-case (:method step "GET")))
         params    (resolve-param-map (:input_mapping step) args chain-ctx request-ctx)
         body      (resolve-param-map (:body_mapping step) args chain-ctx request-ctx)
-        headers   (->> (merge (select-keys request-ctx [:authorization :x-request-id
-                                                        :x-correlation-id])
-                              (:extra_headers step {}))
+        headers   (->> (merge request-ctx (:extra_headers step {}))
                        (remove (fn [[_ v]] (nil? v)))
                        (into {} (map (fn [[k v]] [(name k) v]))))
         cache-cfg (:cache step)
@@ -135,13 +133,23 @@
        (into {})))
 
 
+(defprotocol BffTransformer
+  (transform [this args chain-ctx mapped]))
+
+;; Plain fns satisfy BffTransformer via IFn.
+(extend-protocol BffTransformer
+  clojure.lang.IFn
+  (transform [f args chain-ctx mapped]
+    (f args chain-ctx mapped)))
+
 (defonce ^:private transformer-registry (atom {}))
 
 (defn register-transformer!
-  [k f]
-  (swap! transformer-registry assoc k f))
+  "Register a BffTransformer (or plain fn) under key k."
+  [k transformer]
+  (swap! transformer-registry assoc k transformer))
 
-(defn- resolve-transformer-fn [transformer]
+(defn- resolve-transformer [transformer]
   (if-let [k (:key transformer)]
     (or (get @transformer-registry k)
         (throw (ex-info (str "No transformer registered for key: " k)
@@ -151,7 +159,7 @@
 (defn- apply-transformer
   [transformer args chain-ctx mapped]
   (if transformer
-    ((resolve-transformer-fn transformer) args chain-ctx mapped)
+    (transform (resolve-transformer transformer) args chain-ctx mapped)
     mapped))
 
 (defn run-endpoint

@@ -13,8 +13,8 @@
   (log/info "Starting BFF on port 8080")
   (defrecord MemoryCache [store]
     cache/CacheStore
-    (cache-get       [_ k]       (log/info "Fetching " k " from cache") (get @store k))
-    (cache-put       [_ k v ttl] (log/info "Adding " k " to cache with value " v) (swap! store assoc k v))
+    (cache-get       [_ k]       (log/infof "Cache get: %s" k) (get @store k))
+    (cache-put       [_ k v ttl] (log/infof "Cache put: %s = %s" k v) (swap! store assoc k v))
     (cache-invalidate [_ k]      (swap! store dissoc k)))     
   (cache/register-cache! (->MemoryCache (atom {})))
   (run-jetty (bff/create-handler "bff-spec.yaml") {:port 8080 :join? true}))

@@ -4,10 +4,28 @@
             [clojure.string :as str]
             [bff.jq-engine :as jq]))
 
+(defn- resolve-env-str
+  [s]
+  (str/replace s
+               #"\$\{([^}:-]+)(?::-(.*?))?\}"
+               (fn [[_ var-name default]]
+                 (or (System/getenv var-name)
+                     default
+                     (throw (ex-info (str "Environment variable not set: " var-name)
+                                     {:variable var-name}))))))
+
+(defn- resolve-env-vars
+  [x]
+  (cond
+    (string? x) (resolve-env-str x)
+    (map? x)    (update-vals x resolve-env-vars)
+    (vector? x) (mapv resolve-env-vars x)
+    :else       x))
+
 (defn load-spec
   [resource-path]
   (if-let [r (io/resource resource-path)]
-    (-> r slurp yaml/parse-string)
+    (-> r slurp yaml/parse-string resolve-env-vars)
     (throw (ex-info (str "Spec file not found: " resource-path)
                     {:path resource-path}))))
 
@@ -45,8 +63,9 @@
 
 (defn- merge-specs
   [specs]
-  {:endpoints   (vec (mapcat :endpoints specs))
-   :input_types (vec (mapcat #(get % :input_types []) specs))})
+  {:endpoints       (vec (mapcat :endpoints specs))
+   :input_types     (vec (mapcat #(get % :input_types []) specs))
+   :forward_headers (vec (distinct (mapcat #(get % :forward_headers []) specs)))})
 
 (defn- compile-mapping-entry [mapping]
   (if-let [expr (:jq mapping)]

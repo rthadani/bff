@@ -7,6 +7,16 @@
 #   - Optional steps conditioned on args
 #   - Transformer function reference
 
+# Base URL for upstream services. Set API_BASE_URL to point at each environment.
+#   API_BASE_URL=https://api.prod.internal clj -M -m bff.core
+
+# Headers forwarded to every backend step.
+# Defaults to [authorization, x-request-id, x-correlation-id] if omitted.
+forward_headers:
+  - authorization
+  - x-request-id
+  - x-correlation-id
+
 # Optional top-level input types (for mutation args)
 input_types:
   - name: LineItemInput
@@ -46,7 +56,7 @@ endpoints:
     backend_chain:
 
       - id: fetch_profile
-        url: "http://localhost:3001/api/v1/users/{userId}"
+        url: "${API_BASE_URL:-http://localhost:3001}/api/v1/users/{userId}"
         method: GET
         deps: []
         critical: true                   # abort if this fails
@@ -58,7 +68,7 @@ endpoints:
           key: "profile:{userId}"  
 
       - id: fetch_preferences
-        url: "http://localhost:3001/api/v1/preferences/{userId}"
+        url: "${API_BASE_URL:-http://localhost:3001}/api/v1/preferences/{userId}"
         method: GET
         deps: []                         # no deps → parallel with fetch_profile
         input_mapping:
@@ -67,7 +77,7 @@ endpoints:
             key: userId
 
       - id: fetch_activity
-        url: "http://localhost:3001/api/v1/activity"
+        url: "${API_BASE_URL:-http://localhost:3001}/api/v1/activity"
         method: GET
         deps: [fetch_profile]            # needs profile.internal_id
         condition:
@@ -149,7 +159,7 @@ endpoints:
     backend_chain:
 
       - id: create_order
-        url: "http://localhost:3001/api/v1/orders"
+        url: "${API_BASE_URL:-http://localhost:3001}/api/v1/orders"
         method: POST
         deps: []
         critical: true                  # if order creation fails, stop everything
@@ -165,7 +175,7 @@ endpoints:
             key: priority
 
       - id: notify_user
-        url: "http://localhost:3001/api/v1/notify"
+        url: "${API_BASE_URL:-http://localhost:3001}/api/v1/notify"
         method: POST
         deps: [create_order]
         critical: false                 # notification failure is non-fatal
@@ -185,7 +195,7 @@ endpoints:
             jq: ".total_amount"
 
       - id: update_inventory
-        url: "http://localhost:3001/api/v1/reserve"
+        url: "${API_BASE_URL:-http://localhost:3001}/api/v1/reserve"
         method: POST
         deps: [create_order]
         critical: false

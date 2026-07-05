@@ -1,5 +1,7 @@
 # BFF Engine
 
+[![Clojars Project](https://img.shields.io/clojars/v/io.github.rthadani/bff.svg)](https://clojars.org/io.github.rthadani/bff)
+
 A spec-driven GraphQL Backend-for-Frontend engine in Clojure.  
 Write a YAML spec → get a fully functional GraphQL API. No boilerplate per endpoint.
 

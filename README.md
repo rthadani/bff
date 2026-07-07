@@ -159,7 +159,7 @@ jq: ".profile.display_name"                  # nested
 jq: ".contact.emails[0].address"             # array index
 jq: "[.items[].title]"                       # collect from array
 jq: ".price * .quantity"                     # arithmetic
-jq: "if .verified then \"✓\" else null end"  # conditional
+jq: "if .verified then \"yay\" else null end"  # conditional
 jq: ".name // \"Anonymous\""                 # default value
 jq: "[.items[] | select(.active)] | length"  # filter + count
 ```

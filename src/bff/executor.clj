@@ -149,6 +149,23 @@
   [k transformer]
   (swap! transformer-registry assoc k transformer))
 
+(defprotocol BffResolver
+  (resolve-endpoint [this args ctx]))
+
+;; Plain fns satisfy BffResolver via IFn.
+(extend-protocol BffResolver
+  clojure.lang.IFn
+  (resolve-endpoint [f args ctx]
+    (f args ctx)))
+
+(defonce ^:private resolver-registry (atom {}))
+
+(defn register-resolver!
+  "Register a BffResolver (or plain fn) under key k.
+   A registered resolver for an endpoint bypasses backend_chain entirely."
+  [k resolver]
+  (swap! resolver-registry assoc k resolver))
+
 (defn- resolve-transformer [transformer]
   (if-let [k (:key transformer)]
     (or (get @transformer-registry k)
@@ -162,6 +179,13 @@
     (transform (resolve-transformer transformer) args chain-ctx mapped)
     mapped))
 
+(defn- resolve-resolver [resolver-cfg]
+  (if-let [k (:key resolver-cfg)]
+    (or (get @resolver-registry k)
+        (throw (ex-info (str "No resolver registered for key: " k)
+                        {:key k :registered (keys @resolver-registry)})))
+    (requiring-resolve (symbol (:ns resolver-cfg) (:fn resolver-cfg)))))
+
 (defn run-endpoint
   "Build and execute the full endpoint pipeline.
 
@@ -169,21 +193,26 @@
      {:data   {...}         ; the mapped output fields
       :errors [{...}]       ; any step errors (may be empty)}
 
+   If the endpoint has a :resolver key, it is called instead of the
+   backend_chain. The resolver owns the full {:data :errors} response.
+
    Partial failures are represented in :errors while :data contains
    whatever fields could be resolved from successful steps."
   [endpoint args request-ctx]
   (m/sp
-    (let [chain-ctx (m/? (execute-graph (:backend_chain endpoint)
-                                        args
-                                        request-ctx))
-          errors    (error/step-errors chain-ctx)
-          mapped    (apply-output-mapping (:output_mapping endpoint)
+    (if-let [resolver-cfg (:resolver endpoint)]
+      (resolve-endpoint (resolve-resolver resolver-cfg) args request-ctx)
+      (let [chain-ctx (m/? (execute-graph (:backend_chain endpoint)
                                           args
-                                          chain-ctx
-                                          request-ctx)
-          final     (apply-transformer (:transformer endpoint)
-                                       args
-                                       chain-ctx
-                                       mapped)]
-      {:data   final
-       :errors errors})))
+                                          request-ctx))
+            errors    (error/step-errors chain-ctx)
+            mapped    (apply-output-mapping (:output_mapping endpoint)
+                                            args
+                                            chain-ctx
+                                            request-ctx)
+            final     (apply-transformer (:transformer endpoint)
+                                         args
+                                         chain-ctx
+                                         mapped)]
+        {:data   final
+         :errors errors}))))

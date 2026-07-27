@@ -26,6 +26,13 @@
                              [:license
                               [:name "MIT License"]
                               [:url "https://opensource.org/licenses/MIT"]]]]})
+  (b/compile-clj {:src-dirs  ["src"]
+                  :class-dir class-dir
+                  :basis     @basis
+                  :ns-compile '[bff.executor]})
+  (b/javac {:src-dirs  ["java"]
+            :class-dir class-dir
+            :basis     @basis})
   (b/copy-dir {:src-dirs   ["src"]
                :target-dir class-dir})
   (b/jar {:class-dir class-dir

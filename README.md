@@ -293,26 +293,39 @@ transformer:
 
 ### Java
 
-`bff.executor.BffTransformer` is generated as a Java interface by the protocol.
-Register an instance before `create-handler` runs:
+Extend `BaseTransformer` to avoid Clojure types entirely. The `chainCtx` parameter
+gives you a `StepResult` per step with `isOk()`, `isError()`, and `getData()`:
 
 ```java
-import bff.executor.BffTransformer;
+import bff.executor.BaseTransformer;
 import clojure.java.api.Clojure;
-import clojure.lang.IPersistentMap;
 
-public class AttachWarningsTransformer implements BffTransformer {
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+
+public class AttachWarningsTransformer extends BaseTransformer {
     @Override
-    public Object transform(Object args, Object chainCtx, Object mapped) {
-        IPersistentMap output = (IPersistentMap) mapped;
-        return output.assoc(clojure.lang.Keyword.intern("warnings"),
-                            clojure.lang.PersistentVector.EMPTY);
+    public Map<String, Object> transform(
+            Map<String, Object>     args,
+            Map<String, StepResult> chainCtx,
+            Map<String, Object>     output) {
+
+        List<String> warnings = new ArrayList<>();
+        if (chainCtx.get("notify_user").isError()) {
+            warnings.add("Notification could not be sent");
+        }
+        if (chainCtx.get("update_inventory").isError()) {
+            warnings.add("Inventory reservation failed");
+        }
+        output.put("warnings", warnings);
+        return output;
     }
 }
 
 // Registration — call before bff.core/create-handler
-clojure.lang.IFn register = Clojure.var("bff.executor", "register-transformer!");
-register.invoke("attach-warnings", new AttachWarningsTransformer());
+Clojure.var("bff.executor", "register-transformer!")
+       .invoke("attach-warnings", new AttachWarningsTransformer());
 ```
 
 Then reference it in the spec with `key: attach-warnings`.
@@ -456,6 +469,72 @@ public class BffTransformers {
         }
     }
 }
+```
+
+### Custom resolvers
+
+For endpoints that don't fit the HTTP backend chain — database calls, cache
+lookups, local computation — extend `BaseResolver`. It handles all Clojure
+interop internally; your implementation works with plain Java `Map`s.
+
+```java
+import bff.executor.BaseResolver;
+import java.util.Map;
+
+public class UserProfileResolver extends BaseResolver {
+
+    private final UserRepository repo;
+
+    public UserProfileResolver(UserRepository repo) {
+        this.repo = repo;
+    }
+
+    @Override
+    public ResolverResult resolve(Map<String, Object> args, Map<String, Object> ctx) {
+        String userId = (String) args.get("userId");
+        String tenant = (String) ctx.get("x-tenant-id");   // forwarded header
+
+        User user = repo.findByIdAndTenant(userId, tenant);
+        if (user == null) {
+            return ResolverResult.error("User not found: " + userId);
+        }
+
+        return ResolverResult.ok(Map.of(
+            "fullName", user.getName(),
+            "email",    user.getEmail()
+        ));
+    }
+}
+```
+
+Register it alongside transformers in the same `@Component`:
+
+```java
+Clojure.var("bff.executor", "register-resolver!")
+       .invoke("user-profile", new UserProfileResolver(userRepo));
+```
+
+Then reference it in the spec — no `backend_chain` required:
+
+```yaml
+- name: userProfile
+  type: query
+  args:
+    userId: { type: String! }
+  output_type:
+    name: UserProfile
+    fields:
+      fullName: String
+      email: String
+  resolver:
+    key: user-profile
+```
+
+`ResolverResult.withError` lets you return partial data alongside errors:
+
+```java
+return ResolverResult.ok(Map.of("fullName", user.getName()))
+                     .withError("email service unavailable");
 ```
 
 ---

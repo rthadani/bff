@@ -292,6 +292,72 @@
       (is (= "Bob" (get-in data [:profile :name])))
       (is (= "NY"  (get-in data [:profile :location :city]))))))
 
+;; ---------------------------------------------------------------------------
+;; register-resolver! / resolver dispatch
+;; ---------------------------------------------------------------------------
+
+(defn test-resolver-fn [args ctx]
+  {:data {:fromResolver true :userId (:userId args) :tenant (:x-tenant-id ctx)}
+   :errors []})
+
+(deftest test-resolver-key-bypasses-backend-chain
+  (let [called (atom false)]
+    (executor/register-resolver! "test-bypass"
+      (fn [_ _] {:data {:ok true} :errors []}))
+    (with-redefs [http/call (fn [_] (reset! called true) (http/ok {}))]
+      (run-sync! (executor/run-endpoint {:resolver {:key "test-bypass"}} {} {}))
+      (is (false? @called) "backend chain must not be called when resolver is present"))))
+
+(deftest test-resolver-receives-args-and-ctx
+  (executor/register-resolver! "test-resolver-args"
+    (fn [args ctx]
+      {:data {:a (:userId args) :c (:authorization ctx)} :errors []}))
+  (let [{:keys [data]} (run-sync!
+                         (executor/run-endpoint
+                           {:resolver {:key "test-resolver-args"}}
+                           {:userId "u1"}
+                           {:authorization "Bearer tok"}))]
+    (is (= "u1"         (:a data)))
+    (is (= "Bearer tok" (:c data)))))
+
+(deftest test-resolver-errors-returned-as-is
+  (executor/register-resolver! "test-resolver-errors"
+    (fn [_ _]
+      {:data {} :errors [{:message "something went wrong"}]}))
+  (let [{:keys [errors]} (run-sync!
+                           (executor/run-endpoint
+                             {:resolver {:key "test-resolver-errors"}} {} {}))]
+    (is (= 1 (count errors)))
+    (is (= "something went wrong" (:message (first errors))))))
+
+(deftest test-resolver-unknown-key-throws
+  (is (thrown? clojure.lang.ExceptionInfo
+               (run-sync! (executor/run-endpoint
+                            {:resolver {:key "definitely-not-registered-resolver"}}
+                            {} {})))))
+
+(deftest test-resolver-ns-fn-form-resolves-and-calls
+  (let [{:keys [data]} (run-sync!
+                         (executor/run-endpoint
+                           {:resolver {:ns "bff.executor-test" :fn "test-resolver-fn"}}
+                           {:userId "u99"}
+                           {:x-tenant-id "t1"}))]
+    (is (true?    (:fromResolver data)))
+    (is (= "u99"  (:userId data)))
+    (is (= "t1"   (:tenant data)))))
+
+(deftest test-resolver-protocol-implementation
+  (let [impl (reify executor/BffResolver
+               (resolve-endpoint [_ args _ctx]
+                 {:data {:via-protocol true :id (:id args)} :errors []}))]
+    (executor/register-resolver! "test-protocol-resolver" impl)
+    (let [{:keys [data]} (run-sync!
+                           (executor/run-endpoint
+                             {:resolver {:key "test-protocol-resolver"}}
+                             {:id "x1"} {}))]
+      (is (true?  (:via-protocol data)))
+      (is (= "x1" (:id data))))))
+
 (deftest test-run-endpoint-nested-output-mapping-with-jq
   (with-redefs [http/call (fn [_] (http/ok {:user {:id "u1" :score 99}}))]
     (let [endpoint (assoc base-endpoint

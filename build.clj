@@ -5,7 +5,7 @@
 (def lib             'io.github.rthadani/bff)
 (def default-version "0.1.0-SNAPSHOT")
 
-(def class-dir "target/classes")
+(def class-dir "target/classes"
 (def basis (delay (b/create-basis {:project "deps.edn"})))
 
 (defn- jar-file [version]

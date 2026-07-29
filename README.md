@@ -86,6 +86,19 @@ endpoints:             # list of query or mutation definitions
   args:                     # GraphQL input arguments
     argName: { type: String!, default: "val" }
 
+    # optional per-arg validation rules:
+    userId:
+      type: String!
+      validate:
+        pattern: "^[a-f0-9-]{36}$"   # regex — strings only
+        message: "userId must be a UUID"
+    amount:
+      type: Float!
+      validate:
+        min: 0                        # inclusive lower bound — numbers only
+        max: 10000                    # inclusive upper bound — numbers only
+        message: "amount must be between 0 and 10000"
+
   output_type:              # GraphQL return type (auto-generated)
     name: MyType
     fields:
@@ -100,6 +113,17 @@ endpoints:             # list of query or mutation definitions
       source: step
       step_id: some_step
       jq: ".nested.value"
+
+  # optional — custom validator runs before the backend chain.
+  # return nil/[] to pass, or [{:message "..."}] to fail.
+  # resolve a Clojure var at startup:
+  validator:
+    ns: my.project.validators
+    fn: my-validator-fn
+
+  # or look up a pre-registered instance by key:
+  validator:
+    key: my-validator
 
   # resolve a Clojure var at startup:
   transformer:

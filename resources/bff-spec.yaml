@@ -6,6 +6,8 @@
 #   - Critical steps that abort the chain on failure
 #   - Optional steps conditioned on args
 #   - Transformer function reference
+#   - Built-in arg validation (pattern, min, max)
+#   - Custom validator reference
 
 # Base URL for upstream services. Set API_BASE_URL to point at each environment.
 #   API_BASE_URL=https://api.prod.internal clj -M -m bff.core
@@ -31,7 +33,11 @@ endpoints:
     description: "Fetch user dashboard — profile, preferences and recent activity"
 
     args:
-      userId:          { type: String! }
+      userId:
+        type: String!
+        validate:
+          pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+          message: "userId must be a valid UUID"
       includeActivity: { type: Boolean, default: false }
 
     output_type:
@@ -141,9 +147,17 @@ endpoints:
     description: "Create an order then notify user and reserve inventory in parallel"
 
     args:
-      userId:   { type: String! }
+      userId:
+        type: String!
+        validate:
+          pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+          message: "userId must be a valid UUID"
       items:    { type: "[LineItemInput!]!" }
       priority: { type: String, default: "normal" }
+
+    # custom validator for cross-arg rules that built-in validation can't express
+    validator:
+      key: order-validator
 
     output_type:
       name: OrderResult

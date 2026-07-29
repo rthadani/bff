@@ -20,7 +20,7 @@
                 :version   version
                 :basis     @basis
                 :src-dirs  ["src"]
-                :pom-data  [[:description "Spec-driven GraphQL BFF engine for Clojure"]
+                :pom-data  [[:description "Spec-driven GraphQL API fronting real REST backends"]
                             [:url "https://github.com/rthadani/bff"]
                             [:licenses
                              [:license
@@ -29,7 +29,7 @@
   (b/compile-clj {:src-dirs  ["src"]
                   :class-dir class-dir
                   :basis     @basis
-                  :ns-compile '[bff.executor]})
+                  :ns-compile '[bff.executor bff.validator]})
   (b/javac {:src-dirs  ["java"]
             :class-dir class-dir
             :basis     @basis})

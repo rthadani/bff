@@ -20,10 +20,18 @@
    :timeout           30000})
 
 (defn ok [data]    {:status :ok    :data  data})
-(defn err [code msg & [detail]]
-  {:status :error
-   :error  (cond-> {:code code :message msg}
-             detail (assoc :detail detail))})
+(defn err
+  "Build a tagged error result. Optional `detail` (map) attaches free-form
+   context; optional `http-status` (int) records the upstream HTTP status
+   code when the failure originated from an HTTP response, so a step's
+   spec-level `errors:` mapping can remap by status."
+  ([code msg]                     (err code msg nil nil))
+  ([code msg detail]               (err code msg detail nil))
+  ([code msg detail http-status]
+   (cond-> {:status :error
+            :error  (cond-> {:code code :message msg}
+                      detail (assoc :detail detail))}
+     http-status (assoc :http-status http-status))))
 
 (defn error? [result] (= :error (:status result)))
 
@@ -46,37 +54,44 @@
       (= 400 status)
       (err :bad-request
            (str "Backend returned 400")
-           {:step step-id :body parsed})
+           {:step step-id :body parsed}
+           status)
 
       (= 401 status)
       (err :unauthorized
            "Backend returned 401 — check auth header forwarding"
-           {:step step-id})
+           {:step step-id}
+           status)
 
       (= 403 status)
       (err :forbidden
            "Backend returned 403"
-           {:step step-id :body parsed})
+           {:step step-id :body parsed}
+           status)
 
       (= 404 status)
       (err :not-found
            "Backend resource not found"
-           {:step step-id :body parsed})
+           {:step step-id :body parsed}
+           status)
 
       (= 422 status)
       (err :unprocessable
            "Backend validation error"
-           {:step step-id :body parsed})
+           {:step step-id :body parsed}
+           status)
 
       (<= 500 status 599)
       (err :backend-error
            (str "Backend returned " status)
-           {:step step-id :body parsed})
+           {:step step-id :body parsed}
+           status)
 
       :else
       (err :unexpected-status
            (str "Unexpected HTTP status " status)
-           {:step step-id :body parsed}))))
+           {:step step-id :body parsed}
+           status))))
 
 
 (defn call

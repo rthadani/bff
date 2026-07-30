@@ -128,7 +128,37 @@ endpoints:             # list of query and mutation definitions
   cache:
     key: "prefix:{argName}"  # cache key template — same placeholder syntax as url
     ttl: 60000               # TTL in milliseconds (default 60000)
+
+  # Retry on selected failure codes
+  retry:
+    max: 2                             # max additional attempts (3 calls total)
+    on_code: [unauthorized, timeout]   # semantic codes from http_client — see below
+    before_retry:                      # optional — run a hook between attempts
+      key: cmap-token-refresh          # or {ns: my.ns, fn: my-hook}
 ```
+
+### Retryable error codes
+
+The semantic codes come from `bff.http-client` and match one-to-one with the
+kind of failure that occurred. Use these in `retry.on_code`:
+
+| Code                | Origin                                    |
+|---------------------|-------------------------------------------|
+| `no-response`       | Underlying HTTP call returned no status   |
+| `bad-request`       | Upstream returned 400                     |
+| `unauthorized`      | Upstream returned 401                     |
+| `forbidden`         | Upstream returned 403                     |
+| `not-found`         | Upstream returned 404                     |
+| `unprocessable`     | Upstream returned 422                     |
+| `backend-error`     | Upstream returned 5xx                     |
+| `unexpected-status` | Any other non-2xx status                  |
+| `connection-refused`| TCP/connect failure                       |
+| `timeout`           | Connect or socket read timeout            |
+| `unexpected`        | Any other client-side exception           |
+
+The `before_retry` hook — see [extensions.md](extensions.md#retry-hook) — is
+called between attempts and can return a rewritten request-ctx (typically
+with a refreshed `Authorization` header).
 
 ## Mapping sources
 

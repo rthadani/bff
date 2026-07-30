@@ -1,20 +1,22 @@
 # Extensions
 
-Four extension points let you plug custom logic into the request pipeline.
+Five extension points let you plug custom logic into the request pipeline.
 Each follows the same pattern: a Clojure protocol with an `IFn` extension
 (so plain functions work without wrapping), a Java interface under
 `io.github.rthadani.bff.*` (so Java classes are first-class), and — for the
 three request-scoped points — a convenience base class that hides the
 boilerplate.
 
-| Extension     | When it runs                        | Declared in spec as | Java interface                                    |
-|---------------|-------------------------------------|---------------------|---------------------------------------------------|
-| `validator`   | Before the backend chain            | `validator:`        | `io.github.rthadani.bff.BffValidator`             |
-| `transformer` | After output mapping                | `transformer:`      | `io.github.rthadani.bff.BffTransformer`           |
-| `resolver`    | Instead of the backend chain        | `resolver:`         | `io.github.rthadani.bff.BffResolver`              |
-| cache backend | Around every cacheable step         | (registered once)   | `io.github.rthadani.bff.CacheStore`               |
+| Extension     | When it runs                             | Declared in spec as                  | Java interface                                    |
+|---------------|------------------------------------------|--------------------------------------|---------------------------------------------------|
+| `validator`   | Before the backend chain                 | `validator:`                         | `io.github.rthadani.bff.BffValidator`             |
+| `transformer` | After output mapping                     | `transformer:`                       | `io.github.rthadani.bff.BffTransformer`           |
+| `resolver`    | Instead of the backend chain             | `resolver:`                          | `io.github.rthadani.bff.BffResolver`              |
+| cache backend | Around every cacheable step              | (registered once)                    | `io.github.rthadani.bff.CacheStore`               |
+| retry hook    | Between step attempts (when retry fires) | inside a step's `retry.before_retry` | *(Clojure only for now)*                          |
 
-Java authors have two options at every extension point:
+Java authors have two options at every extension point that ships with a Java
+interface:
 
 1. **Implement the interface directly.** Args and ctx arrive as
    `Map<String, Object>` with String keys; conversion to/from Clojure keywords
@@ -401,3 +403,84 @@ public class RedisCacheStore implements CacheStore {
 
 Register the instance once at application startup — see
 [Spring Boot integration](spring-boot.md) for the recommended pattern.
+
+---
+
+## Retry hook
+
+Runs between attempts of a backend step whose `retry:` config declared a
+`before_retry` reference. Purpose: rewrite the request-ctx (typically to
+inject a refreshed auth header) before the next call. If no hook is
+declared, retries reuse the current ctx unchanged.
+
+The step spec:
+
+```yaml
+- id: fetch_customer
+  url: "{cmap_base}/portal/customers/{id}"
+  method: GET
+  retry:
+    max: 2
+    on_code: [unauthorized]
+    before_retry:
+      key: cmap-token-refresh
+```
+
+See [spec.md](spec.md#retryable-error-codes) for the list of codes accepted
+by `on_code`.
+
+### Protocol
+
+```clojure
+(defprotocol BffRetryHook
+  (before-retry [this failure-context]))
+```
+
+The `failure-context` map contains:
+
+| Key            | Value                                             |
+|----------------|---------------------------------------------------|
+| `:step-id`     | Keyword id of the step that just failed           |
+| `:attempt`     | 1-indexed retry number about to happen            |
+| `:args`        | GraphQL input arguments                           |
+| `:chain-ctx`   | Results of steps completed so far                 |
+| `:request-ctx` | Current request context (headers, remote-addr)   |
+| `:error`       | The `{:code :message :detail}` error map          |
+
+Return a new request-ctx map to use for the retry, or `nil` to reuse the
+current one.
+
+### Clojure — ns/fn
+
+```clojure
+(ns my.project.retry)
+
+(defn cmap-token-refresh
+  [{:keys [request-ctx]}]
+  (let [fresh-token (cmap-client/refresh-service-token!)]
+    (assoc request-ctx :authorization (str "Bearer " fresh-token))))
+```
+
+```yaml
+retry:
+  before_retry:
+    ns: my.project.retry
+    fn: cmap-token-refresh
+```
+
+### Clojure — registered by key
+
+```clojure
+(require '[bff.retry :as retry])
+
+(retry/register-retry-hook! "cmap-token-refresh"
+  (fn [{:keys [request-ctx]}]
+    (assoc request-ctx :authorization
+           (str "Bearer " (cmap-client/refresh-service-token!)))))
+```
+
+```yaml
+retry:
+  before_retry:
+    key: cmap-token-refresh
+```

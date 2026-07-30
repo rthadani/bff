@@ -59,6 +59,13 @@ public final class Bff {
         resolveVar("bff.cache", "register-cache!").invoke(store);
     }
 
+    /** Append a context enricher to the ordered chain that runs at the top of
+     *  every GraphQL operation. Enrichers fire in registration order and each
+     *  sees the ctx accumulated by earlier enrichers. */
+    public static void registerContextEnricher(BffContextEnricher enricher) {
+        resolveVar("bff.enricher", "register-enricher!").invoke(enricher);
+    }
+
     /**
      * Load and compile the spec at {@code specPath} (classpath resource) and
      * return the underlying Ring handler as a Clojure {@link IFn}. Use this if

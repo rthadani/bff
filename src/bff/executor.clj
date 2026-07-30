@@ -5,6 +5,7 @@
             [bff.graph :as graph]
             [bff.error :as error]
             [bff.cache :as cache]
+            [bff.enricher :as enricher]
             [bff.interop :as interop]
             [bff.retry :as retry]
             [bff.validator :as validator]
@@ -248,21 +249,22 @@
    whatever fields could be resolved from successful steps."
   [endpoint args request-ctx]
   (m/sp
-    (if-let [val-errors (validator/run-validation endpoint args request-ctx)]
-      {:data nil :errors val-errors}
-      (if-let [resolver-cfg (:resolver endpoint)]
-        (resolve-endpoint (resolve-resolver resolver-cfg) args request-ctx)
-        (let [chain-ctx (m/? (execute-graph (:backend_chain endpoint)
-                                            args
-                                            request-ctx))
-              errors    (error/step-errors chain-ctx)
-              mapped    (apply-output-mapping (:output_mapping endpoint)
+    (let [request-ctx (enricher/enrich-ctx request-ctx)]
+      (if-let [val-errors (validator/run-validation endpoint args request-ctx)]
+        {:data nil :errors val-errors}
+        (if-let [resolver-cfg (:resolver endpoint)]
+          (resolve-endpoint (resolve-resolver resolver-cfg) args request-ctx)
+          (let [chain-ctx (m/? (execute-graph (:backend_chain endpoint)
                                               args
-                                              chain-ctx
-                                              request-ctx)
-              final     (apply-transformer (:transformer endpoint)
-                                           args
-                                           chain-ctx
-                                           mapped)]
-          {:data   final
-           :errors errors})))))
+                                              request-ctx))
+                errors    (error/step-errors chain-ctx)
+                mapped    (apply-output-mapping (:output_mapping endpoint)
+                                                args
+                                                chain-ctx
+                                                request-ctx)
+                final     (apply-transformer (:transformer endpoint)
+                                             args
+                                             chain-ctx
+                                             mapped)]
+            {:data   final
+             :errors errors}))))))

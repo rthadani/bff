@@ -1,19 +1,20 @@
 # Extensions
 
-Five extension points let you plug custom logic into the request pipeline.
+Six extension points let you plug custom logic into the request pipeline.
 Each follows the same pattern: a Clojure protocol with an `IFn` extension
 (so plain functions work without wrapping), a Java interface under
 `io.github.rthadani.bff.*` (so Java classes are first-class), and — for the
 three request-scoped points — a convenience base class that hides the
 boilerplate.
 
-| Extension     | When it runs                             | Declared in spec as                  | Java interface                                    |
-|---------------|------------------------------------------|--------------------------------------|---------------------------------------------------|
-| `validator`   | Before the backend chain                 | `validator:`                         | `io.github.rthadani.bff.BffValidator`             |
-| `transformer` | After output mapping                     | `transformer:`                       | `io.github.rthadani.bff.BffTransformer`           |
-| `resolver`    | Instead of the backend chain             | `resolver:`                          | `io.github.rthadani.bff.BffResolver`              |
-| cache backend | Around every cacheable step              | (registered once)                    | `io.github.rthadani.bff.CacheStore`               |
-| retry hook    | Between step attempts (when retry fires) | inside a step's `retry.before_retry` | *(Clojure only for now)*                          |
+| Extension          | When it runs                             | Declared in spec as                  | Java interface                                    |
+|--------------------|------------------------------------------|--------------------------------------|---------------------------------------------------|
+| context enricher   | First, once per request                  | (registered once)                    | `io.github.rthadani.bff.BffContextEnricher`       |
+| `validator`        | After enrichment, before the chain       | `validator:`                         | `io.github.rthadani.bff.BffValidator`             |
+| `transformer`      | After output mapping                     | `transformer:`                       | `io.github.rthadani.bff.BffTransformer`           |
+| `resolver`         | Instead of the backend chain             | `resolver:`                          | `io.github.rthadani.bff.BffResolver`              |
+| cache backend      | Around every cacheable step              | (registered once)                    | `io.github.rthadani.bff.CacheStore`               |
+| retry hook         | Between step attempts (when retry fires) | inside a step's `retry.before_retry` | *(Clojure only for now)*                          |
 
 Java authors have two options at every extension point that ships with a Java
 interface:
@@ -29,6 +30,75 @@ interface:
 
 Plain Clojure functions continue to work everywhere — the Java interfaces are
 purely additive.
+
+---
+
+## Context enricher
+
+Runs once at the top of every GraphQL operation, before validators and the
+backend chain. Purpose: pre-compute values into `ctx` that every downstream
+step or validator can read without repeating the lookup — the canonical case
+is fetching a customer / equipment identifier from Redis using the JWT
+subject.
+
+Multiple enrichers can be registered; they run in registration order and each
+sees the ctx accumulated by earlier enrichers. An enricher's return value is
+merged into ctx (return `nil` to leave ctx alone).
+
+### Protocol
+
+```clojure
+(defprotocol BffContextEnricher
+  (enrich [this ctx]))
+```
+
+### Clojure — registration
+
+```clojure
+(require '[bff.enricher :as enricher])
+
+(enricher/register-enricher!
+  (fn [{:keys [authorization]}]
+    (let [subject     (jwt/subject authorization)
+          customer-id (redis/hget (str "user:" subject) "customerId")]
+      {:customerId customer-id})))
+```
+
+### Java — interface
+
+```java
+import io.github.rthadani.bff.BffContextEnricher;
+import org.springframework.data.redis.core.StringRedisTemplate;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class CustomerEnricher implements BffContextEnricher {
+    private final StringRedisTemplate redis;
+
+    public CustomerEnricher(StringRedisTemplate redis) { this.redis = redis; }
+
+    @Override
+    public Map<String, Object> enrich(Map<String, Object> ctx) {
+        String subject = JwtUtil.subject((String) ctx.get("authorization"));
+        String cust    = redis.opsForHash().get("user:" + subject, "customerId").toString();
+        return Map.of("customerId", cust);
+    }
+}
+```
+
+Register the instance once at application startup — see
+[Spring Boot integration](spring-boot.md).
+
+Downstream, an endpoint or step can read the enriched value via a `ctx`
+source mapping:
+
+```yaml
+input_mapping:
+  customerId:
+    source: ctx
+    key:    customerId
+```
 
 ---
 

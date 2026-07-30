@@ -72,6 +72,7 @@ import bff.executor.BaseTransformer;
 import bff.executor.BaseResolver;
 import bff.validator.BaseValidator;
 import io.github.rthadani.bff.Bff;
+import io.github.rthadani.bff.BffContextEnricher;
 import io.github.rthadani.bff.CacheStore;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -89,6 +90,7 @@ public class BffExtensions {
     @Autowired StringRedisTemplate redis;
 
     public void registerAll() {
+        Bff.registerContextEnricher(new CustomerEnricher(redis));
         Bff.registerTransformer("attach-warnings", new WarningsTransformer());
         Bff.registerValidator  ("check-order",     new OrderValidator());
         Bff.registerResolver   ("user-profile",    new UserProfileResolver());
@@ -126,6 +128,17 @@ public class BffExtensions {
         @Override
         protected ResolverResult doResolve(Map<String, Object> args, Map<String, Object> ctx) {
             return ResolverResult.ok(Map.of("fullName", "Alice", "email", "alice@example.com"));
+        }
+    }
+
+    static class CustomerEnricher implements BffContextEnricher {
+        private final StringRedisTemplate redis;
+        CustomerEnricher(StringRedisTemplate redis) { this.redis = redis; }
+
+        @Override public Map<String, Object> enrich(Map<String, Object> ctx) {
+            String subject = JwtUtil.subject((String) ctx.get("authorization"));
+            Object cust    = redis.opsForHash().get("user:" + subject, "customerId");
+            return cust == null ? null : Map.of("customerId", cust.toString());
         }
     }
 

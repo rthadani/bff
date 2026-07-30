@@ -30,4 +30,8 @@ jobs:
           key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn') }}
           restore-keys: ${{ runner.os }}-clojure-
 
-      - run: clojure -M:test
+      - name: Compile Java interfaces
+        run: clojure -T:build compile-java
+
+      - name: Run tests
+        run: clojure -M:test

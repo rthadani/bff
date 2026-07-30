@@ -172,6 +172,48 @@
       (is (= "from protocol" (:message (first errors)))))))
 
 ;; ---------------------------------------------------------------------------
+;; Java interface — io.github.rthadani.bff.BffValidator
+;; ---------------------------------------------------------------------------
+
+(deftest test-java-interface-validator-args-passed-as-string-keys
+  (testing "Java implementations receive String-keyed maps, not Clojure keywords"
+    (let [seen (atom nil)
+          impl (reify io.github.rthadani.bff.BffValidator
+                 (validate [_ args _ctx]
+                   (reset! seen args)
+                   nil))]
+      (validator/register-validator! "test-java-arg-keys" impl)
+      (validator/run-validation
+        (assoc base-endpoint :validator {:key "test-java-arg-keys"})
+        {:userId "u42" :amount 100}
+        {})
+      (is (instance? java.util.Map @seen))
+      (is (= "u42" (.get ^java.util.Map @seen "userId")))
+      (is (= 100   (.get ^java.util.Map @seen "amount"))))))
+
+(deftest test-java-interface-validator-errors-keywordized
+  (testing "String-keyed error maps returned from Java are converted back to keyword-keyed"
+    (let [impl (reify io.github.rthadani.bff.BffValidator
+                 (validate [_ _ _]
+                   (java.util.List/of
+                     (doto (java.util.HashMap.)
+                       (.put "message" "java rejected")))))]
+      (validator/register-validator! "test-java-error-keys" impl)
+      (let [errors (validator/run-validation
+                     (assoc base-endpoint :validator {:key "test-java-error-keys"})
+                     {} {})]
+        (is (= 1 (count errors)))
+        (is (= "java rejected" (:message (first errors))))))))
+
+(deftest test-java-interface-validator-empty-list-passes
+  (let [impl (reify io.github.rthadani.bff.BffValidator
+               (validate [_ _ _] (java.util.List/of)))]
+    (validator/register-validator! "test-java-empty" impl)
+    (is (nil? (validator/run-validation
+                (assoc base-endpoint :validator {:key "test-java-empty"})
+                {} {})))))
+
+;; ---------------------------------------------------------------------------
 ;; builtin + custom combined
 ;; ---------------------------------------------------------------------------
 

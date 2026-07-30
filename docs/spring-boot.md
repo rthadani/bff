@@ -106,18 +106,27 @@ public class BffController {
 
 ## Registering extensions
 
-Use a separate `@Component` to register transformers, validators, and resolvers
-before the controller initialises. Add `@DependsOn("bffExtensions")` on
-`BffController` if you need to guarantee ordering.
+Use a separate `@Component` to register transformers, validators, resolvers,
+and the cache backend before the controller initialises. Add
+`@DependsOn("bffExtensions")` on `BffController` if you need to guarantee
+ordering.
+
+Extensions can implement the raw Java interfaces under
+`io.github.rthadani.bff.*` or extend the convenience base classes — pick per
+extension. See [extensions.md](extensions.md) for the full API.
 
 ```java
 import bff.executor.BaseTransformer;
 import bff.executor.BaseResolver;
 import bff.validator.BaseValidator;
+import io.github.rthadani.bff.CacheStore;
 import clojure.java.api.Clojure;
 import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -125,27 +134,30 @@ import java.util.Map;
 @Component("bffExtensions")
 public class BffExtensions {
 
+    @Autowired StringRedisTemplate redis;
+
     @PostConstruct
     public void register() {
         Clojure.var("clojure.core", "require").invoke(Clojure.read("bff.executor"));
         Clojure.var("clojure.core", "require").invoke(Clojure.read("bff.validator"));
+        Clojure.var("clojure.core", "require").invoke(Clojure.read("bff.cache"));
 
-        Clojure.var("bff.executor", "register-transformer!")
+        Clojure.var("bff.executor",  "register-transformer!")
                .invoke("attach-warnings", new WarningsTransformer());
-
         Clojure.var("bff.validator", "register-validator!")
-               .invoke("check-order", new OrderValidator());
-
-        Clojure.var("bff.executor", "register-resolver!")
-               .invoke("user-profile", new UserProfileResolver());
+               .invoke("check-order",     new OrderValidator());
+        Clojure.var("bff.executor",  "register-resolver!")
+               .invoke("user-profile",    new UserProfileResolver());
+        Clojure.var("bff.cache",     "register-cache!")
+               .invoke(new RedisCacheStore(redis));
     }
 
     static class WarningsTransformer extends BaseTransformer {
         @Override
-        public Map<String, Object> transform(
-                Map<String, Object> args,
+        protected Map<String, Object> doTransform(
+                Map<String, Object>     args,
                 Map<String, StepResult> chainCtx,
-                Map<String, Object> output) {
+                Map<String, Object>     output) {
             List<String> warnings = new ArrayList<>();
             if (chainCtx.get("notify_user").isError()) {
                 warnings.add("Notification could not be sent");
@@ -157,7 +169,7 @@ public class BffExtensions {
 
     static class OrderValidator extends BaseValidator {
         @Override
-        public List<String> validate(Map<String, Object> args, Map<String, Object> ctx) {
+        protected List<String> doValidate(Map<String, Object> args, Map<String, Object> ctx) {
             List<String> errors = new ArrayList<>();
             Double amount = (Double) args.get("amount");
             if (amount != null && amount > 10000) {
@@ -169,8 +181,23 @@ public class BffExtensions {
 
     static class UserProfileResolver extends BaseResolver {
         @Override
-        public ResolverResult resolve(Map<String, Object> args, Map<String, Object> ctx) {
+        protected ResolverResult doResolve(Map<String, Object> args, Map<String, Object> ctx) {
             return ResolverResult.ok(Map.of("fullName", "Alice", "email", "alice@example.com"));
+        }
+    }
+
+    static class RedisCacheStore implements CacheStore {
+        private final StringRedisTemplate redis;
+        RedisCacheStore(StringRedisTemplate redis) { this.redis = redis; }
+
+        @Override public Object get(String key) {
+            return redis.opsForValue().get(key);
+        }
+        @Override public void put(String key, Object value, long ttlMs) {
+            redis.opsForValue().set(key, value.toString(), Duration.ofMillis(ttlMs));
+        }
+        @Override public void invalidate(String key) {
+            redis.delete(key);
         }
     }
 }

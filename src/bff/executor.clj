@@ -5,6 +5,7 @@
             [bff.graph :as graph]
             [bff.error :as error]
             [bff.cache :as cache]
+            [bff.interop :as interop]
             [bff.validator :as validator]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
@@ -143,6 +144,16 @@
   (transform [f args chain-ctx mapped]
     (f args chain-ctx mapped)))
 
+;; Java implementations of io.github.rthadani.bff.BffTransformer are first-class.
+(extend-type io.github.rthadani.bff.BffTransformer
+  BffTransformer
+  (transform [this args chain-ctx mapped]
+    (interop/->clj
+     (.transform this
+                 (interop/->java args)
+                 (interop/->java chain-ctx)
+                 (interop/->java mapped)))))
+
 (defonce ^:private transformer-registry (atom {}))
 
 (defn register-transformer!
@@ -158,6 +169,15 @@
   clojure.lang.IFn
   (resolve-endpoint [f args ctx]
     (f args ctx)))
+
+;; Java implementations of io.github.rthadani.bff.BffResolver are first-class.
+(extend-type io.github.rthadani.bff.BffResolver
+  BffResolver
+  (resolve-endpoint [this args ctx]
+    (interop/->clj
+     (.resolve this
+               (interop/->java args)
+               (interop/->java ctx)))))
 
 (defonce ^:private resolver-registry (atom {}))
 

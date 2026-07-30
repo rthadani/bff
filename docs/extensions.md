@@ -1,15 +1,32 @@
 # Extensions
 
-Three extension points let you plug custom logic into the request pipeline.
-All three follow the same pattern: a Clojure protocol with an `IFn` extension
-(so plain functions work without wrapping), a registry for pre-registered
-instances, and a Java base class that hides Clojure types.
+Four extension points let you plug custom logic into the request pipeline.
+Each follows the same pattern: a Clojure protocol with an `IFn` extension
+(so plain functions work without wrapping), a Java interface under
+`io.github.rthadani.bff.*` (so Java classes are first-class), and — for the
+three request-scoped points — a convenience base class that hides the
+boilerplate.
 
-| Extension     | When it runs                        | Declared in spec as |
-|---------------|-------------------------------------|---------------------|
-| `validator`   | Before the backend chain            | `validator:`        |
-| `transformer` | After output mapping                | `transformer:`      |
-| `resolver`    | Instead of the backend chain        | `resolver:`         |
+| Extension     | When it runs                        | Declared in spec as | Java interface                                    |
+|---------------|-------------------------------------|---------------------|---------------------------------------------------|
+| `validator`   | Before the backend chain            | `validator:`        | `io.github.rthadani.bff.BffValidator`             |
+| `transformer` | After output mapping                | `transformer:`      | `io.github.rthadani.bff.BffTransformer`           |
+| `resolver`    | Instead of the backend chain        | `resolver:`         | `io.github.rthadani.bff.BffResolver`              |
+| cache backend | Around every cacheable step         | (registered once)   | `io.github.rthadani.bff.CacheStore`               |
+
+Java authors have two options at every extension point:
+
+1. **Implement the interface directly.** Args and ctx arrive as
+   `Map<String, Object>` with String keys; conversion to/from Clojure keywords
+   is handled at the interop boundary. This is the minimum-ceremony route and
+   composes cleanly with Spring's `@Component`.
+2. **Extend the convenience base class.** Gets you typed helpers
+   (`ResolverResult`, `StepResult`) at the cost of one extra layer of
+   inheritance. Recommended when the interface's raw `Map` surface would be
+   awkward.
+
+Plain Clojure functions continue to work everywhere — the Java interfaces are
+purely additive.
 
 ---
 
@@ -62,10 +79,29 @@ validator:
   key: check-order
 ```
 
-### Java
+### Java — interface
 
-Extend `BaseValidator`. Return an empty list to pass, or a list of error messages
-to fail. All Clojure types are handled internally.
+```java
+import io.github.rthadani.bff.BffValidator;
+import java.util.List;
+import java.util.Map;
+
+public class OrderValidator implements BffValidator {
+    @Override
+    public List<Map<String, Object>> validate(Map<String, Object> args, Map<String, Object> ctx) {
+        if ("GBP".equals(args.get("currency"))
+                && ((Number) args.get("amount")).doubleValue() > 10000) {
+            return List.of(Map.of("message", "GBP orders above 10000 require manual approval"));
+        }
+        return List.of();
+    }
+}
+```
+
+### Java — base class
+
+Extend `BaseValidator` when you'd rather return a `List<String>` of messages
+and let the base class wrap them into the expected error shape.
 
 ```java
 import bff.validator.BaseValidator;
@@ -75,9 +111,9 @@ import java.util.Map;
 
 public class OrderValidator extends BaseValidator {
     @Override
-    public List<String> validate(Map<String, Object> args, Map<String, Object> ctx) {
+    protected List<String> doValidate(Map<String, Object> args, Map<String, Object> ctx) {
         List<String> errors = new ArrayList<>();
-        Double amount = (Double) args.get("amount");
+        Double amount   = (Double) args.get("amount");
         String currency = (String) args.get("currency");
         if (amount != null && amount > 10000 && "GBP".equals(currency)) {
             errors.add("GBP orders above 10000 require manual approval");
@@ -85,11 +121,10 @@ public class OrderValidator extends BaseValidator {
         return errors;
     }
 }
-
-// Registration — call before bff.core/create-handler
-Clojure.var("bff.validator", "register-validator!")
-       .invoke("check-order", new OrderValidator());
 ```
+
+Register the instance before `bff.core/create-handler` runs — see the
+[Spring Boot integration](spring-boot.md) for the recommended pattern.
 
 ---
 
@@ -139,10 +174,36 @@ transformer:
   key: attach-warnings
 ```
 
-### Java
+### Java — interface
 
-Extend `BaseTransformer`. The `chainCtx` parameter gives you a `StepResult` per
-step with `isOk()`, `isError()`, and `getData()`.
+`chainCtx` is a `Map<String, Object>` where each value is itself a
+`Map<String, Object>` — the raw step result with a `"status"` key
+(`"ok"` or `"error"`), a `"data"` key when successful, and an `"error"`
+sub-map when failed.
+
+```java
+import io.github.rthadani.bff.BffTransformer;
+import java.util.Map;
+
+public class AttachWarningsTransformer implements BffTransformer {
+    @Override
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> transform(Map<String, Object> args,
+                                         Map<String, Object> chainCtx,
+                                         Map<String, Object> output) {
+        Map<String, Object> notify = (Map<String, Object>) chainCtx.get("notify_user");
+        if ("error".equals(notify.get("status"))) {
+            output.put("warning", "Notification could not be sent");
+        }
+        return output;
+    }
+}
+```
+
+### Java — base class
+
+`BaseTransformer` unpacks `chainCtx` into `Map<String, StepResult>` for you.
+`StepResult` has `isOk()`, `isError()`, `getData()`, and `getMessage()`.
 
 ```java
 import bff.executor.BaseTransformer;
@@ -152,7 +213,7 @@ import java.util.Map;
 
 public class AttachWarningsTransformer extends BaseTransformer {
     @Override
-    public Map<String, Object> transform(
+    protected Map<String, Object> doTransform(
             Map<String, Object>     args,
             Map<String, StepResult> chainCtx,
             Map<String, Object>     output) {
@@ -165,10 +226,6 @@ public class AttachWarningsTransformer extends BaseTransformer {
         return output;
     }
 }
-
-// Registration — call before bff.core/create-handler
-Clojure.var("bff.executor", "register-transformer!")
-       .invoke("attach-warnings", new AttachWarningsTransformer());
 ```
 
 ---
@@ -220,11 +277,38 @@ resolver:
   key: user-profile
 ```
 
-### Java
+### Java — interface
 
-Extend `BaseResolver`. Return a `ResolverResult` built with the static factories.
-The `output_type` in the spec still defines the GraphQL schema; the resolver must
-return keys that match those fields.
+Return a `Map<String, Object>` with `"data"` and `"errors"` keys. Keys inside
+`data` become the endpoint's `output_type` fields.
+
+```java
+import io.github.rthadani.bff.BffResolver;
+import java.util.List;
+import java.util.Map;
+
+public class UserProfileResolver implements BffResolver {
+    private final UserRepository repo;
+
+    public UserProfileResolver(UserRepository repo) { this.repo = repo; }
+
+    @Override
+    public Map<String, Object> resolve(Map<String, Object> args, Map<String, Object> ctx) {
+        String userId = (String) args.get("userId");
+        User user = repo.findById(userId);
+        if (user == null) {
+            return Map.of("data", Map.of(),
+                          "errors", List.of(Map.of("message", "User not found: " + userId)));
+        }
+        return Map.of("data", Map.of("fullName", user.getName(), "email", user.getEmail()),
+                      "errors", List.of());
+    }
+}
+```
+
+### Java — base class
+
+`BaseResolver` builds the response for you via `ResolverResult`.
 
 ```java
 import bff.executor.BaseResolver;
@@ -233,12 +317,10 @@ import java.util.Map;
 public class UserProfileResolver extends BaseResolver {
     private final UserRepository repo;
 
-    public UserProfileResolver(UserRepository repo) {
-        this.repo = repo;
-    }
+    public UserProfileResolver(UserRepository repo) { this.repo = repo; }
 
     @Override
-    public ResolverResult resolve(Map<String, Object> args, Map<String, Object> ctx) {
+    protected ResolverResult doResolve(Map<String, Object> args, Map<String, Object> ctx) {
         String userId = (String) args.get("userId");
         User user = repo.findById(userId);
         if (user == null) {
@@ -250,10 +332,6 @@ public class UserProfileResolver extends BaseResolver {
         ));
     }
 }
-
-// Registration — call before bff.core/create-handler
-Clojure.var("bff.executor", "register-resolver!")
-       .invoke("user-profile", new UserProfileResolver(userRepo));
 ```
 
 `ResolverResult.withError` lets you return partial data alongside errors:
@@ -262,3 +340,64 @@ Clojure.var("bff.executor", "register-resolver!")
 return ResolverResult.ok(Map.of("fullName", user.getName()))
                      .withError("email service unavailable");
 ```
+
+---
+
+## Cache backend
+
+Registered once at startup. Every backend step that declares
+`cache: {key: "..."}` in the spec routes reads and writes through the configured
+implementation. Any exception thrown by the store is logged and swallowed —
+cache failures never propagate to the GraphQL response.
+
+### Protocol
+
+```clojure
+(defprotocol CacheStore
+  (cache-get        [this key])
+  (cache-put        [this key value ttl-ms])
+  (cache-invalidate [this key]))
+```
+
+### Clojure — registration
+
+```clojure
+(require '[bff.cache :as cache])
+
+(cache/register-cache!
+  (reify cache/CacheStore
+    (cache-get        [_ k]         (get @store k))
+    (cache-put        [_ k v _ttl]  (swap! store assoc k v))
+    (cache-invalidate [_ k]         (swap! store dissoc k))))
+```
+
+### Java — interface
+
+```java
+import io.github.rthadani.bff.CacheStore;
+import org.springframework.data.redis.core.StringRedisTemplate;
+
+public class RedisCacheStore implements CacheStore {
+    private final StringRedisTemplate redis;
+
+    public RedisCacheStore(StringRedisTemplate redis) { this.redis = redis; }
+
+    @Override
+    public Object get(String key) {
+        return redis.opsForValue().get(key);
+    }
+
+    @Override
+    public void put(String key, Object value, long ttlMs) {
+        redis.opsForValue().set(key, value.toString(), java.time.Duration.ofMillis(ttlMs));
+    }
+
+    @Override
+    public void invalidate(String key) {
+        redis.delete(key);
+    }
+}
+```
+
+Register the instance once at application startup — see
+[Spring Boot integration](spring-boot.md) for the recommended pattern.

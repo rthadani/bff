@@ -358,6 +358,74 @@
       (is (true?  (:via-protocol data)))
       (is (= "x1" (:id data))))))
 
+;; ---------------------------------------------------------------------------
+;; Java interface — io.github.rthadani.bff.BffTransformer / BffResolver
+;; ---------------------------------------------------------------------------
+
+(deftest test-java-interface-transformer-receives-string-keys
+  (let [seen (atom nil)
+        impl (reify io.github.rthadani.bff.BffTransformer
+               (transform [_ args _chain _mapped]
+                 (reset! seen args)
+                 (doto (java.util.HashMap.) (.put "flag" true))))]
+    (executor/register-transformer! "test-java-transformer" impl)
+    (with-redefs [http/call (fn [_] (http/ok {}))]
+      (let [{:keys [data]} (run-sync!
+                             (executor/run-endpoint
+                               (assoc base-endpoint :transformer {:key "test-java-transformer"})
+                               {:userId "u1"} {}))]
+        (is (instance? java.util.Map @seen))
+        (is (= "u1"  (.get ^java.util.Map @seen "userId")))
+        (is (true? (:flag data)))))))
+
+(deftest test-java-interface-transformer-sees-step-status-as-string
+  (testing "step results in chainCtx have string statuses, not clojure Keywords"
+    (let [seen (atom nil)
+          impl (reify io.github.rthadani.bff.BffTransformer
+                 (transform [_ _args chain-ctx mapped]
+                   (reset! seen chain-ctx)
+                   mapped))]
+      (executor/register-transformer! "test-java-chain" impl)
+      (with-redefs [http/call (fn [_] (http/ok {}))]
+        (run-sync! (executor/run-endpoint
+                     (assoc base-endpoint :transformer {:key "test-java-chain"})
+                     {} {}))
+        (let [step (.get ^java.util.Map @seen "s")]
+          (is (instance? java.util.Map step))
+          (is (= "ok" (.get ^java.util.Map step "status"))))))))
+
+(deftest test-java-interface-resolver-returns-string-keyed-map
+  (let [impl (reify io.github.rthadani.bff.BffResolver
+               (resolve [_ args _ctx]
+                 (doto (java.util.HashMap.)
+                   (.put "data"   (doto (java.util.HashMap.)
+                                    (.put "fromJava" true)
+                                    (.put "id"       (.get ^java.util.Map args "id"))))
+                   (.put "errors" (java.util.List/of)))))]
+    (executor/register-resolver! "test-java-resolver" impl)
+    (let [{:keys [data errors]} (run-sync!
+                                  (executor/run-endpoint
+                                    {:resolver {:key "test-java-resolver"}}
+                                    {:id "x1"} {}))]
+      (is (true?  (:fromJava data)))
+      (is (= "x1" (:id data)))
+      (is (empty? errors)))))
+
+(deftest test-java-interface-resolver-errors-keywordized
+  (let [impl (reify io.github.rthadani.bff.BffResolver
+               (resolve [_ _args _ctx]
+                 (doto (java.util.HashMap.)
+                   (.put "data" nil)
+                   (.put "errors" (java.util.List/of
+                                    (doto (java.util.HashMap.)
+                                      (.put "message" "java-side failure")))))))]
+    (executor/register-resolver! "test-java-resolver-err" impl)
+    (let [{:keys [errors]} (run-sync!
+                             (executor/run-endpoint
+                               {:resolver {:key "test-java-resolver-err"}} {} {}))]
+      (is (= 1 (count errors)))
+      (is (= "java-side failure" (:message (first errors)))))))
+
 (deftest test-run-endpoint-nested-output-mapping-with-jq
   (with-redefs [http/call (fn [_] (http/ok {:user {:id "u1" :score 99}}))]
     (let [endpoint (assoc base-endpoint

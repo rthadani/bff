@@ -1,4 +1,5 @@
-(ns bff.validator)
+(ns bff.validator
+  (:require [bff.interop :as interop]))
 
 (defprotocol BffValidator
   (validate [this args ctx]))
@@ -7,6 +8,17 @@
 (extend-protocol BffValidator
   clojure.lang.IFn
   (validate [f args ctx] (f args ctx)))
+
+;; Java implementations of io.github.rthadani.bff.BffValidator are first-class.
+;; Args/ctx are converted to String-keyed java.util.Map on the way in;
+;; returned error maps are keywordized on the way out.
+(extend-type io.github.rthadani.bff.BffValidator
+  BffValidator
+  (validate [this args ctx]
+    (some-> (.validate this (interop/->java args) (interop/->java ctx))
+            interop/->clj
+            seq
+            vec)))
 
 (defonce ^:private validator-registry (atom {}))
 

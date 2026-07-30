@@ -1,11 +1,6 @@
 package bff.validator;
 
-import clojure.lang.IMapEntry;
-import clojure.lang.IPersistentMap;
-import clojure.lang.Keyword;
-import clojure.lang.PersistentArrayMap;
-import clojure.lang.PersistentHashMap;
-import clojure.lang.PersistentVector;
+import io.github.rthadani.bff.BffValidator;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -15,9 +10,10 @@ import java.util.Map;
 /**
  * Convenience base class for implementing custom BFF validators in Java.
  *
- * Extend this class and implement {@link #validate(Map, Map)}.
- * Return an empty list when the args are valid, or a list of error messages
- * to fail validation. All Clojure data types are handled internally.
+ * <p>Extend this class and implement {@link #validate(Map, Map)} — return an
+ * empty list if the args are valid, or a list of human-readable error messages
+ * to fail validation. The base class wraps each message into the {@code {"message": ...}}
+ * shape the engine expects, so you never touch Clojure data structures.
  *
  * <pre>{@code
  * public class OrderValidator extends BaseValidator {
@@ -34,19 +30,24 @@ import java.util.Map;
  * }
  * }</pre>
  *
- * Register the instance before {@code bff.core/create-handler} runs:
- * <pre>{@code
- * Clojure.var("bff.validator", "register-validator!").invoke("order-validator", new OrderValidator());
- * }</pre>
+ * <p>Register the instance before {@code bff.core/create-handler} runs — via the
+ * {@code Bff} facade or {@code bff.validator/register-validator!}.
  */
 public abstract class BaseValidator implements BffValidator {
 
     @Override
-    public final Object validate(Object args, Object ctx) {
-        Map<String, Object> javaArgs = toJavaMap((IPersistentMap) args);
-        Map<String, Object> javaCtx  = toJavaMap((IPersistentMap) ctx);
-        List<String> messages = validate(javaArgs, javaCtx);
-        return toClojureErrors(messages);
+    public final List<Map<String, Object>> validate(Map<String, Object> args, Map<String, Object> ctx) {
+        List<String> messages = doValidate(args, ctx);
+        if (messages == null || messages.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> out = new ArrayList<>(messages.size());
+        for (String msg : messages) {
+            Map<String, Object> err = new HashMap<>();
+            err.put("message", msg);
+            out.add(err);
+        }
+        return out;
     }
 
     /**
@@ -56,28 +57,5 @@ public abstract class BaseValidator implements BffValidator {
      * @param ctx  Request context — forwarded headers and remote-addr
      * @return empty list if valid; a list of error messages if invalid
      */
-    public abstract List<String> validate(Map<String, Object> args, Map<String, Object> ctx);
-
-    private static Map<String, Object> toJavaMap(IPersistentMap m) {
-        Map<String, Object> out = new HashMap<>();
-        if (m == null) return out;
-        for (Object o : m) {
-            IMapEntry e   = (IMapEntry) o;
-            Object    k   = e.key();
-            String    key = (k instanceof Keyword) ? ((Keyword) k).getName() : k.toString();
-            out.put(key, e.val());
-        }
-        return out;
-    }
-
-    private static Object toClojureErrors(List<String> messages) {
-        if (messages == null || messages.isEmpty()) {
-            return PersistentVector.EMPTY;
-        }
-        Object[] maps = messages.stream()
-            .map(msg -> PersistentArrayMap.createAsIfByAssoc(
-                    new Object[]{Keyword.intern("message"), msg}))
-            .toArray();
-        return PersistentVector.create(java.util.Arrays.asList(maps));
-    }
+    protected abstract List<String> doValidate(Map<String, Object> args, Map<String, Object> ctx);
 }

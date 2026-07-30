@@ -1,0 +1,7 @@
+target/
+.cpcache/
+.clj-kondo/
+.lsp/
+.idea/
+*.iml
+.vscode/

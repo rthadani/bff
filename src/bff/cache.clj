@@ -6,6 +6,15 @@
   (cache-put       [this key value ttl-ms])
   (cache-invalidate [this key]))
 
+;; Java implementations of io.github.rthadani.bff.CacheStore are first-class.
+;; The cache passes opaque values through without conversion — the impl decides
+;; how to serialize.
+(extend-type io.github.rthadani.bff.CacheStore
+  CacheStore
+  (cache-get        [this key]           (.get this key))
+  (cache-put        [this key value ttl] (.put this key value ttl))
+  (cache-invalidate [this key]           (.invalidate this key)))
+
 (defonce ^:private store (atom nil))
 
 (defn register-cache! [impl]

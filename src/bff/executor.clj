@@ -6,6 +6,7 @@
             [bff.error :as error]
             [bff.cache :as cache]
             [bff.interop :as interop]
+            [bff.retry :as retry]
             [bff.validator :as validator]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
@@ -83,6 +84,32 @@
             (cache/save cache-key result (:ttl cache-cfg 60000)))
           result))))
 
+(defn- execute-step-with-retry
+  "Run a step and, if it declares a :retry policy, re-run it up to :max more
+   times when the result's error code matches :on_code. An optional
+   :before_retry hook is invoked between attempts and can rewrite the
+   request-ctx (e.g. inject a refreshed auth token)."
+  [step args chain-ctx request-ctx]
+  (if-let [retry-cfg (:retry step)]
+    (loop [attempt     0
+           current-ctx request-ctx]
+      (let [result (execute-step step args chain-ctx current-ctx)]
+        (if (retry/should-retry? retry-cfg result attempt)
+          (let [next-attempt (inc attempt)
+                new-ctx (retry/apply-before-retry
+                          retry-cfg
+                          {:step-id     (keyword (:id step))
+                           :attempt     next-attempt
+                           :args        args
+                           :chain-ctx   chain-ctx
+                           :request-ctx current-ctx
+                           :error       (:error result)})]
+            (log/infof "Step [%s] retry #%d after %s"
+                       (:id step) next-attempt (get-in result [:error :code]))
+            (recur next-attempt new-ctx))
+          result)))
+    (execute-step step args chain-ctx request-ctx)))
+
 (defn- step->task
   [step args chain-ctx-atom request-ctx]
   (m/sp
@@ -92,7 +119,7 @@
                       (not (resolve-value condition args ctx request-ctx)))]
       (when-not skip?
         (let [result (m/? (m/via m/blk
-                                 (execute-step step args ctx request-ctx)))]
+                                 (execute-step-with-retry step args ctx request-ctx)))]
           (swap! chain-ctx-atom assoc (keyword (:id step)) result)
           result)))))
 

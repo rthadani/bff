@@ -343,6 +343,20 @@ return ResolverResult.ok(Map.of("fullName", user.getName()))
                      .withError("email service unavailable");
 ```
 
+Attach a machine-readable error code that surfaces under `extensions.code` on
+the GraphQL response — clients can switch on it without parsing the message:
+
+```java
+return ResolverResult.error("MAC already in use", "MAC_ALREADY_MAPPED");
+
+return ResolverResult.ok(Map.of("fullName", user.getName()))
+                     .withError("email service unavailable", "EMAIL_UNAVAILABLE");
+```
+
+Clojure resolvers surface the same shape by returning `{:message "..." :code "..."}`
+in `:errors` — the engine lifts a top-level `:code` into `:extensions.code`
+automatically.
+
 ---
 
 ## Cache backend

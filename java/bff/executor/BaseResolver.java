@@ -68,16 +68,35 @@ public abstract class BaseResolver implements BffResolver {
 
         /** Error result with empty data. */
         public static ResolverResult error(String message) {
+            return error(message, null);
+        }
+
+        /** Error result with empty data and a machine-readable error code.
+         *  The code surfaces under {@code extensions.code} in the GraphQL
+         *  response — clients can switch on it. */
+        public static ResolverResult error(String message, String code) {
             List<Map<String, Object>> errs = new ArrayList<>();
-            errs.add(Map.of("message", message));
+            errs.add(buildError(message, code));
             return new ResolverResult(new HashMap<>(), errs);
         }
 
         /** Attach an additional error to a partial-success result. */
         public ResolverResult withError(String message) {
+            return withError(message, null);
+        }
+
+        /** Attach an additional error with a machine-readable code. */
+        public ResolverResult withError(String message, String code) {
             List<Map<String, Object>> errs = new ArrayList<>(this.errors);
-            errs.add(Map.of("message", message));
+            errs.add(buildError(message, code));
             return new ResolverResult(this.data, errs);
+        }
+
+        private static Map<String, Object> buildError(String message, String code) {
+            Map<String, Object> err = new HashMap<>();
+            err.put("message", message);
+            if (code != null) err.put("code", code);
+            return err;
         }
     }
 }

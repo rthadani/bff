@@ -68,6 +68,21 @@
     (task #(.complete p %) #(.completeExceptionally p %))
     (.get p)))
 
+(defn- error->graphql
+  "Normalise an error entry for Lacinia's :extensions channel.
+
+   Step-level errors already arrive with :extensions populated (see
+   bff.error/step-errors). Resolver-returned errors typically don't — they
+   may set :code at the top level. Lift a top-level :code into
+   :extensions.code so downstream clients see a consistent shape."
+  [e]
+  (let [existing (or (:extensions e) {})
+        with-code (cond-> existing
+                    (and (:code e) (not (contains? existing :code)))
+                    (assoc :code (:code e)))]
+    {:message    (:message e)
+     :extensions with-code}))
+
 (defn- make-resolver
   [endpoint]
   (fn [ctx args _val]
@@ -76,10 +91,7 @@
           (run-task-sync (executor/run-endpoint endpoint args request-ctx))]
       (if (seq errors)
         ;; Surface partial errors while still returning available data
-        (resolve/resolve-as data (map (fn [e]
-                                        {:message    (:message e)
-                                         :extensions (:extensions e)})
-                                      errors))
+        (resolve/resolve-as data (map error->graphql errors))
         data))))
 
 (defn- build-args [args-spec]

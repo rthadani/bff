@@ -28,3 +28,17 @@
     (let [ctx {:create_order (http/err :backend-error "500")}]
       (is (thrown? clojure.lang.ExceptionInfo
                    (error/throw-if-critical! ctx ["create_order"]))))))
+
+;; ---------------------------------------------------------------------------
+;; http-status attached to error results (PR 7)
+;; ---------------------------------------------------------------------------
+
+(deftest test-err-without-http-status
+  (let [e (http/err :timeout "t")]
+    (is (nil? (:http-status e)))
+    (is (= :timeout (get-in e [:error :code])))))
+
+(deftest test-err-with-http-status
+  (let [e (http/err :unauthorized "401" nil 401)]
+    (is (= 401 (:http-status e)))
+    (is (= :unauthorized (get-in e [:error :code])))))

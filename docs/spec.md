@@ -135,7 +135,34 @@ endpoints:             # list of query and mutation definitions
     on_code: [unauthorized, timeout]   # semantic codes from http_client — see below
     before_retry:                      # optional — run a hook between attempts
       key: cmap-token-refresh          # or {ns: my.ns, fn: my-hook}
+
+  # Remap step failures to domain-specific error codes
+  errors:
+    400: DUPLICATE_CUSTOMER            # keyed by upstream HTTP status
+    unauthorized: TOKEN_EXPIRED        # or by semantic code from http_client
 ```
+
+### Error code mapping
+
+Each step failure carries both a raw HTTP status (when the failure came from an
+HTTP response) and a semantic code (`:unauthorized`, `:timeout`, …). By default
+the semantic code appears under `extensions.code` on the surfaced GraphQL
+error. Declaring an `errors:` map on the step remaps that to a domain-specific
+string of your choice:
+
+```yaml
+- id: create_customer
+  url: "{cmap_base}/portal/customers"
+  method: POST
+  errors:
+    400: DUPLICATE_CUSTOMER
+    422: VALIDATION_FAILED
+    unauthorized: TOKEN_EXPIRED
+```
+
+Lookup order: HTTP status → semantic code (keyword) → semantic code (string).
+The mapping runs *after* the retry loop, so `retry.on_code` still matches
+against the raw semantic codes.
 
 ### Retryable error codes
 

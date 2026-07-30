@@ -110,6 +110,23 @@
           result)))
     (execute-step step args chain-ctx request-ctx)))
 
+(defn- apply-error-mapping
+  "If the step declares an :errors map and the result is an error, remap
+   :code to a domain-specific one. The mapping is looked up by (a) the raw
+   HTTP status code, (b) the semantic code keyword, or (c) the name-string
+   of the semantic code — in that order. The value replaces the original
+   :code as-is (typically a string like \"MAC_ALREADY_MAPPED\").
+
+   Applied *after* retry so retry decisions still use the semantic codes."
+  [step result]
+  (if-let [mapping (and (= :error (:status result)) (:errors step))]
+    (let [semantic (get-in result [:error :code])
+          mapped   (or (get mapping (:http-status result))
+                       (get mapping semantic)
+                       (get mapping (some-> semantic name)))]
+      (cond-> result mapped (assoc-in [:error :code] mapped)))
+    result))
+
 (defn- step->task
   [step args chain-ctx-atom request-ctx]
   (m/sp
@@ -118,8 +135,9 @@
           skip?     (when condition
                       (not (resolve-value condition args ctx request-ctx)))]
       (when-not skip?
-        (let [result (m/? (m/via m/blk
-                                 (execute-step-with-retry step args ctx request-ctx)))]
+        (let [raw    (m/? (m/via m/blk
+                                 (execute-step-with-retry step args ctx request-ctx)))
+              result (apply-error-mapping step raw)]
           (swap! chain-ctx-atom assoc (keyword (:id step)) result)
           result)))))
 

@@ -30,6 +30,25 @@
             :javac-opts ["-source" "17" "-target" "17"
                          "-Xlint:-options"]}))
 
+(defn- mark-provided!
+  "Rewrite the given POM file so the listed groupId/artifactId pairs get
+   <scope>provided</scope>. tools.build doesn't have first-class scope
+   support, so we post-process the XML."
+  [pom-file provided-coords]
+  (let [content (slurp pom-file)
+        marked  (reduce
+                  (fn [xml [group artifact]]
+                    (clojure.string/replace
+                      xml
+                      (re-pattern
+                        (str "(<dependency>\\s*<groupId>" (java.util.regex.Pattern/quote group)
+                             "</groupId>\\s*<artifactId>" (java.util.regex.Pattern/quote artifact)
+                             "</artifactId>\\s*<version>[^<]+</version>)"))
+                      "$1<scope>provided</scope>"))
+                  content
+                  provided-coords)]
+    (spit pom-file marked)))
+
 (defn jar [{:keys [version] :or {version default-version} :as opts}]
   (b/write-pom {:class-dir class-dir
                 :lib       lib
@@ -42,6 +61,8 @@
                              [:license
                               [:name "MIT License"]
                               [:url "https://opensource.org/licenses/MIT"]]]]})
+  (mark-provided! (b/pom-path {:lib lib :class-dir class-dir})
+                  [["jakarta.servlet" "jakarta.servlet-api"]])
   (compile-java opts)
   (b/compile-clj {:src-dirs   ["src"]
                   :class-dir  class-dir

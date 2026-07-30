@@ -19,6 +19,11 @@
   ring/ring-json                                {:mvn/version "0.5.1"}
   ring/ring-jetty-adapter                       {:mvn/version "1.15.3"}
 
+  ;; Compile-time only — declared as provided scope in the published POM
+  ;; (see build.clj) so downstream Jakarta Servlet 6 containers keep their
+  ;; own copy. Every Spring Boot 3 app already brings this transitively.
+  jakarta.servlet/jakarta.servlet-api           {:mvn/version "6.0.0"}
+
   com.taoensso/timbre                            {:mvn/version "6.3.1"}}
 
  :aliases

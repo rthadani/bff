@@ -1,8 +1,8 @@
 # Spring Boot 3 integration
 
-Spring Boot 3 uses `jakarta.servlet.*`, which is incompatible with
-`ring.util.servlet`. The bridge below maps directly between
-`HttpServletRequest`/`HttpServletResponse` and Ring's request/response maps.
+BFF ships with `io.github.rthadani.bff.Bff` — a static Java facade that
+handles Clojure loading, extension registration, and Jakarta servlet wiring
+for you. There is no Ring bridge to hand-roll.
 
 ## Dependencies (`pom.xml`)
 
@@ -19,97 +19,49 @@ Spring Boot 3 uses `jakarta.servlet.*`, which is incompatible with
 </dependency>
 ```
 
-Place the spec file in `src/main/resources/`.
+`jakarta.servlet-api` is declared as `provided` in the BFF POM — your Spring
+Boot 3 starter already brings its own copy, so nothing more to add. Place your
+spec file in `src/main/resources/`.
 
-## Controller
+## Mounting the servlet
+
+The simplest route is `Bff.createServlet(specPath)` behind a
+`ServletRegistrationBean`. All extension registrations must happen before
+the servlet is created (the spec is compiled at that point), so put them in
+the same `@Bean` method or use `@DependsOn` to enforce ordering.
 
 ```java
-import clojure.java.api.Clojure;
-import clojure.lang.IFn;
-import clojure.lang.IMapEntry;
-import clojure.lang.IPersistentMap;
-import clojure.lang.Keyword;
-import clojure.lang.PersistentHashMap;
-import jakarta.annotation.PostConstruct;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.stereotype.Controller;
-import org.springframework.web.bind.annotation.RequestMapping;
+import io.github.rthadani.bff.Bff;
+import jakarta.servlet.http.HttpServlet;
+import org.springframework.boot.web.servlet.ServletRegistrationBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.Map;
+@Configuration
+public class BffConfiguration {
 
-@Controller
-public class BffController {
+    private final BffExtensions extensions;
 
-    private IFn handler;
-
-    @PostConstruct
-    public void init() {
-        IFn require = Clojure.var("clojure.core", "require");
-        require.invoke(Clojure.read("bff.core"));
-        handler = (IFn) Clojure.var("bff.core", "create-handler")
-                                .invoke("bff-spec.yaml");
+    public BffConfiguration(BffExtensions extensions) {
+        this.extensions = extensions;
     }
 
-    @RequestMapping({"/graphql", "/graphiql"})
-    public void handle(HttpServletRequest req, HttpServletResponse res) throws IOException {
-        IPersistentMap ringResp = (IPersistentMap) handler.invoke(toRingRequest(req));
-        writeResponse(ringResp, res);
-    }
-
-    private static IPersistentMap toRingRequest(HttpServletRequest req) throws IOException {
-        Map<Object, Object> headers = new HashMap<>();
-        Enumeration<String> names = req.getHeaderNames();
-        while (names != null && names.hasMoreElements()) {
-            String name = names.nextElement();
-            headers.put(name.toLowerCase(), req.getHeader(name));
-        }
-
-        Map<Object, Object> m = new HashMap<>();
-        m.put(Keyword.intern("server-port"),    req.getServerPort());
-        m.put(Keyword.intern("server-name"),    req.getServerName());
-        m.put(Keyword.intern("remote-addr"),    req.getRemoteAddr());
-        m.put(Keyword.intern("uri"),            req.getRequestURI());
-        m.put(Keyword.intern("query-string"),   req.getQueryString());
-        m.put(Keyword.intern("scheme"),         Keyword.intern(req.getScheme()));
-        m.put(Keyword.intern("request-method"), Keyword.intern(req.getMethod().toLowerCase()));
-        m.put(Keyword.intern("protocol"),       req.getProtocol());
-        m.put(Keyword.intern("headers"),        PersistentHashMap.create(headers));
-        m.put(Keyword.intern("body"),           req.getInputStream());
-        return PersistentHashMap.create(m);
-    }
-
-    private static void writeResponse(IPersistentMap resp, HttpServletResponse res) throws IOException {
-        res.setStatus((Integer) resp.valAt(Keyword.intern("status")));
-
-        IPersistentMap headers = (IPersistentMap) resp.valAt(Keyword.intern("headers"));
-        if (headers != null) {
-            for (Object entry : headers) {
-                IMapEntry e = (IMapEntry) entry;
-                res.setHeader((String) e.key(), (String) e.val());
-            }
-        }
-
-        Object body = resp.valAt(Keyword.intern("body"));
-        if (body instanceof String s) {
-            res.getWriter().write(s);
-        } else if (body instanceof InputStream is) {
-            is.transferTo(res.getOutputStream());
-        }
+    @Bean
+    public ServletRegistrationBean<HttpServlet> bffServlet() {
+        extensions.registerAll();
+        ServletRegistrationBean<HttpServlet> reg =
+            new ServletRegistrationBean<>(Bff.createServlet("bff-spec.yaml"), "/graphql");
+        reg.setName("bff");
+        reg.setLoadOnStartup(1);
+        return reg;
     }
 }
 ```
 
-## Registering extensions
+For a controller-style mount instead of the servlet, use
+`Bff.createHandler(specPath)` and call it yourself.
 
-Use a separate `@Component` to register transformers, validators, resolvers,
-and the cache backend before the controller initialises. Add
-`@DependsOn("bffExtensions")` on `BffController` if you need to guarantee
-ordering.
+## Registering extensions
 
 Extensions can implement the raw Java interfaces under
 `io.github.rthadani.bff.*` or extend the convenience base classes — pick per
@@ -119,9 +71,9 @@ extension. See [extensions.md](extensions.md) for the full API.
 import bff.executor.BaseTransformer;
 import bff.executor.BaseResolver;
 import bff.validator.BaseValidator;
+import io.github.rthadani.bff.Bff;
 import io.github.rthadani.bff.CacheStore;
-import clojure.java.api.Clojure;
-import jakarta.annotation.PostConstruct;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -131,25 +83,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-@Component("bffExtensions")
+@Component
 public class BffExtensions {
 
     @Autowired StringRedisTemplate redis;
 
-    @PostConstruct
-    public void register() {
-        Clojure.var("clojure.core", "require").invoke(Clojure.read("bff.executor"));
-        Clojure.var("clojure.core", "require").invoke(Clojure.read("bff.validator"));
-        Clojure.var("clojure.core", "require").invoke(Clojure.read("bff.cache"));
-
-        Clojure.var("bff.executor",  "register-transformer!")
-               .invoke("attach-warnings", new WarningsTransformer());
-        Clojure.var("bff.validator", "register-validator!")
-               .invoke("check-order",     new OrderValidator());
-        Clojure.var("bff.executor",  "register-resolver!")
-               .invoke("user-profile",    new UserProfileResolver());
-        Clojure.var("bff.cache",     "register-cache!")
-               .invoke(new RedisCacheStore(redis));
+    public void registerAll() {
+        Bff.registerTransformer("attach-warnings", new WarningsTransformer());
+        Bff.registerValidator  ("check-order",     new OrderValidator());
+        Bff.registerResolver   ("user-profile",    new UserProfileResolver());
+        Bff.registerCache(new RedisCacheStore(redis));
     }
 
     static class WarningsTransformer extends BaseTransformer {
@@ -202,5 +145,28 @@ public class BffExtensions {
     }
 }
 ```
+
+## Security
+
+BFF has no built-in auth — it never sees JWTs and never mints tokens. Put
+Spring Security's `SecurityFilterChain` in front of the servlet path:
+
+```java
+@Bean
+public SecurityFilterChain bffSecurity(HttpSecurity http) throws Exception {
+    return http
+        .securityMatcher("/graphql", "/graphiql")
+        .oauth2ResourceServer(o -> o.jwt())
+        .authorizeHttpRequests(auth -> auth
+            .requestMatchers("/graphiql").permitAll()
+            .anyRequest().authenticated())
+        .build();
+}
+```
+
+The `authorization` header (and `x-request-id`, `x-correlation-id`) are
+forwarded to every downstream HTTP step automatically. See
+`forward_headers` in the [spec reference](spec.md) if you need to widen or
+narrow that list.
 
 See [extensions.md](extensions.md) for full documentation on each extension type.

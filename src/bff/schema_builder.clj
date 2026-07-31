@@ -46,13 +46,15 @@
          (into {}))}})
 
 (defn- collect-object-types
+  "Return a seq of single-entry {TypeName typeDef} maps for the top-level
+   type and every nested inline type. Returns [] when passed a bare string
+   type reference (nothing to collect — the definition is elsewhere)."
   [output-type-spec]
-  (apply merge
-    (build-object-type output-type-spec)
-    (->> (:fields output-type-spec)
-         vals
-         (filter nested-type?)
-         (map collect-object-types))))
+  (if (map? output-type-spec)
+    (cons (build-object-type output-type-spec)
+          (mapcat collect-object-types
+                  (filter nested-type? (vals (:fields output-type-spec)))))
+    []))
 
 (defn- build-input-type
   [input-type-spec]
@@ -62,6 +64,44 @@
          (map (fn [[k v]]
                 [(keyword k) {:type (parse-type-str v)}]))
          (into {}))}})
+
+(defn- merge-type-def
+  "Merge two definitions of the same type. Fields are unioned; fields present
+   in both must have identical type declarations. Description falls back to
+   whichever definition supplied one."
+  [kind type-name a b]
+  (let [fields (reduce-kv
+                 (fn [acc field-name field-def]
+                   (if-let [existing (get acc field-name)]
+                     (if (= (:type existing) (:type field-def))
+                       acc
+                       (throw (ex-info (format "Conflicting types for field '%s' in %s '%s'"
+                                               (name field-name) kind (name type-name))
+                                       {:kind     kind
+                                        :type     type-name
+                                        :field    field-name
+                                        :existing (:type existing)
+                                        :incoming (:type field-def)})))
+                     (assoc acc field-name field-def)))
+                 (:fields a)
+                 (:fields b))]
+    (assoc (merge a b) :fields fields)))
+
+(defn- merge-type-maps
+  "Reduce a seq of {typeName typeDef} maps into one. Duplicate type names
+   are merged field-by-field via merge-type-def."
+  [kind type-maps]
+  (reduce
+    (fn [acc one]
+      (reduce-kv
+        (fn [acc' type-name new-def]
+          (if-let [existing (get acc' type-name)]
+            (assoc acc' type-name (merge-type-def kind type-name existing new-def))
+            (assoc acc' type-name new-def)))
+        acc
+        one))
+    {}
+    type-maps))
 
 (defn- run-task-sync
   [task]
@@ -103,9 +143,16 @@
                  (:default v) (assoc :default-value (:default v)))]))
        (into {})))
 
+(defn- output-type-name
+  "output_type is either an inline definition {:name X :fields ...} or a
+   bare string referencing a top-level output_types entry."
+  [endpoint]
+  (let [ot (:output_type endpoint)]
+    (keyword (if (map? ot) (:name ot) ot))))
+
 (defn- build-operation [endpoint extensions]
   {(keyword (:name endpoint))
-   (cond-> {:type        (keyword (get-in endpoint [:output_type :name]))
+   (cond-> {:type        (output-type-name endpoint)
             :description (:description endpoint "")
             :args        (build-args (:args endpoint {}))
             :resolve     (error/wrap-resolver-errors (make-resolver endpoint extensions))}
@@ -134,20 +181,28 @@
   "Compile a Lacinia schema from `spec`. `extensions` is the caller-owned
    config map ({:enrichers :validators :transformers :resolvers :retry-hooks
    :cache :scalars}); it is closed over every resolver so runtime requests
-   carry it into bff.executor/run-endpoint."
+   carry it into bff.executor/run-endpoint.
+
+   Object types can be declared inline on each endpoint's `output_type` or at
+   the top level under `output_types:` (referenced from an endpoint by bare
+   name). Duplicate type names are merged field-by-field; conflicting types
+   on a shared field name throw. Input types (`input_types:`) get the same
+   treatment."
   ([spec] (build-schema spec {}))
   ([spec extensions]
    (let [endpoints (-> spec :endpoints)
          queries   (filter #(= (:type %) "query") endpoints)
          mutations (filter #(= (:type %) "mutation") endpoints)
 
-         objects   (->> endpoints
-                        (map #(collect-object-types (:output_type %)))
-                        (apply merge))
+         objects   (merge-type-maps
+                     "output type"
+                     (concat
+                       (map build-object-type (get spec :output_types []))
+                       (mapcat #(collect-object-types (:output_type %)) endpoints)))
 
-         input-objs (->> (get spec :input_types [])
-                         (map build-input-type)
-                         (apply merge {}))
+         input-objs (merge-type-maps
+                      "input type"
+                      (map build-input-type (get spec :input_types [])))
 
          scalars    (build-scalars (get spec :scalars []) (:scalars extensions))]
 

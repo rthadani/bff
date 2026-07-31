@@ -2,6 +2,7 @@
   (:require [bff.core :as bff]
             [bff.cache :as cache]
             [bff.examples.validators.orders :as order-validator]
+            [bff.scalar :as scalar]
             [demo.mock-services :as mock]
             [ring.adapter.jetty :refer [run-jetty]]
             [taoensso.timbre :as log])
@@ -19,6 +20,7 @@
 
   (log/info "Starting BFF on port 8080")
   (let [config  {:cache      (->MemoryCache (atom {}))
-                 :validators {"order-validator" order-validator/check-order}}
+                 :validators {"order-validator" order-validator/check-order}
+                 :scalars    {"DateTime" scalar/date-time}}
         handler (bff/create-handler "bff-spec.yaml" config)]
     (run-jetty handler {:port 8080 :join? true})))

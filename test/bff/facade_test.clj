@@ -3,7 +3,7 @@
   (:import [io.github.rthadani.bff
             Bff BffConfig
             BffContextEnricher BffValidator BffTransformer BffResolver BffRetryHook
-            CacheStore]))
+            BffScalar CacheStore]))
 
 ;; ---------------------------------------------------------------------------
 ;; BffConfig builder
@@ -47,6 +47,13 @@
                 (get [_ _] nil) (put [_ _ _ _] nil) (invalidate [_ _] nil))
         c (-> (BffConfig/builder) (.cache store) .build)]
     (is (= store (.cache c)))))
+
+(deftest test-builder-keys-scalars-by-name
+  (let [s (reify BffScalar
+            (parse     [_ v] v)
+            (serialize [_ v] v))
+        c (-> (BffConfig/builder) (.scalar "Mac" s) .build)]
+    (is (= s (get (.scalars c) "Mac")))))
 
 (deftest test-builder-produces-immutable-collections
   (let [c (-> (BffConfig/builder)

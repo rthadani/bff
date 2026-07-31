@@ -35,7 +35,7 @@
    {:id                      (str "ord-" (System/currentTimeMillis))
     :status                  "confirmed"
     :total_amount            149.97
-    :estimated_delivery_date "2026-03-18"
+    :estimated_delivery_date "2026-03-18T09:00:00Z"
     :line_items              [{:sku "SKU-001" :quantity 2 :price 49.99}
                               {:sku "SKU-002" :quantity 1 :price 49.99}]}))
 

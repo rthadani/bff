@@ -1,6 +1,7 @@
 (ns bff.schema-builder
   (:require [bff.executor :as executor]
             [bff.error :as error]
+            [bff.scalar :as scalar]
             [com.walmartlabs.lacinia.schema :as schema]
             [com.walmartlabs.lacinia.resolve :as resolve]
             [clojure.string :as str]))
@@ -112,11 +113,28 @@
      (assoc :deprecated (:deprecation_reason endpoint)))})
 
 
+(defn- build-scalar-entry
+  "Turn one spec scalar declaration + its config impl into a Lacinia
+   :scalars entry. Throws if the spec declares a scalar with no impl."
+  [scalar-cfgs {:keys [name description]}]
+  (let [impl (get scalar-cfgs name)]
+    (when (nil? impl)
+      (throw (ex-info (str "Scalar '" name "' declared in spec but no "
+                           "implementation supplied under :scalars")
+                      {:name name :registered (keys scalar-cfgs)})))
+    [(keyword name)
+     (cond-> {:parse     (fn [v] (scalar/parse     impl v))
+              :serialize (fn [v] (scalar/serialize impl v))}
+       description (assoc :description description))]))
+
+(defn- build-scalars [spec-scalars scalar-cfgs]
+  (into {} (map #(build-scalar-entry scalar-cfgs %)) spec-scalars))
+
 (defn build-schema
   "Compile a Lacinia schema from `spec`. `extensions` is the caller-owned
    config map ({:enrichers :validators :transformers :resolvers :retry-hooks
-   :cache}); it is closed over every resolver so runtime requests carry it
-   into bff.executor/run-endpoint."
+   :cache :scalars}); it is closed over every resolver so runtime requests
+   carry it into bff.executor/run-endpoint."
   ([spec] (build-schema spec {}))
   ([spec extensions]
    (let [endpoints (-> spec :endpoints)
@@ -129,10 +147,13 @@
 
          input-objs (->> (get spec :input_types [])
                          (map build-input-type)
-                         (apply merge {}))]
+                         (apply merge {}))
 
-     (-> {:objects        objects
-          :input-objects  input-objs
-          :queries        (->> queries  (map #(build-operation % extensions)) (apply merge {}))
-          :mutations      (->> mutations (map #(build-operation % extensions)) (apply merge {}))}
+         scalars    (build-scalars (get spec :scalars []) (:scalars extensions))]
+
+     (-> (cond-> {:objects        objects
+                  :input-objects  input-objs
+                  :queries        (->> queries  (map #(build-operation % extensions)) (apply merge {}))
+                  :mutations      (->> mutations (map #(build-operation % extensions)) (apply merge {}))}
+           (seq scalars) (assoc :scalars scalars))
          schema/compile))))

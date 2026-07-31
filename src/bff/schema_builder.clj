@@ -137,7 +137,7 @@
    carry it into bff.executor/run-endpoint."
   ([spec] (build-schema spec {}))
   ([spec extensions]
-   (let [endpoints (-> spec :endpoints)
+   (let [endpoints (:endpoints spec)
          queries   (filter #(= (:type %) "query") endpoints)
          mutations (filter #(= (:type %) "mutation") endpoints)
 

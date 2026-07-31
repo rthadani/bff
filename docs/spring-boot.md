@@ -49,7 +49,7 @@ public class BffConfiguration {
             .validator  ("check-order",       ext.orderValidator())
             .transformer("attach-warnings",   ext.warningsTransformer())
             .resolver   ("user-profile",      ext.userProfileResolver())
-            .retryHook  ("cmap-token-refresh", ext.tokenRefreshHook())
+            .retryHook  ("auth-token-refresh", ext.tokenRefreshHook())
             .cache(ext.redisCacheStore())
             .build();
     }
@@ -96,7 +96,7 @@ import java.util.Map;
 public class BffExtensions {
 
     @Autowired StringRedisTemplate redis;
-    @Autowired CmapTokenService    tokens;
+    @Autowired AuthTokenService    tokens;
 
     public BffContextEnricher customerEnricher()   { return new CustomerEnricher(redis); }
     public BaseValidator      orderValidator()     { return new OrderValidator(); }
@@ -151,8 +151,8 @@ public class BffExtensions {
     }
 
     static class TokenRefreshHook implements BffRetryHook {
-        private final CmapTokenService tokens;
-        TokenRefreshHook(CmapTokenService tokens) { this.tokens = tokens; }
+        private final AuthTokenService tokens;
+        TokenRefreshHook(AuthTokenService tokens) { this.tokens = tokens; }
 
         @Override
         @SuppressWarnings("unchecked")

@@ -143,12 +143,19 @@ supplied to `bff.core/create-handler` under the `:scalars` config key (or via
     max: 2                             # max additional attempts (3 calls total)
     on_code: [unauthorized, timeout]   # semantic codes from http_client — see below
     before_retry:                      # optional — run a hook between attempts
-      key: cmap-token-refresh          # or {ns: my.ns, fn: my-hook}
+      key: auth-token-refresh          # or {ns: my.ns, fn: my-hook}
 
   # Remap step failures to domain-specific error codes
   errors:
     400: DUPLICATE_CUSTOMER            # keyed by upstream HTTP status
     unauthorized: TOKEN_EXPIRED        # or by semantic code from http_client
+
+  # Compensating action for cascading rollback
+  compensation:
+    url:    "{service_base}/portal/customers/{customer_id}"
+    method: DELETE
+    input_mapping:
+      customer_id: {source: step, step_id: create_customer, jq: ".data.id"}
 ```
 
 ### Error code mapping
@@ -161,7 +168,7 @@ string of your choice:
 
 ```yaml
 - id: create_customer
-  url: "{cmap_base}/portal/customers"
+  url: "{service_base}/portal/customers"
   method: POST
   errors:
     400: DUPLICATE_CUSTOMER
@@ -172,6 +179,44 @@ string of your choice:
 Lookup order: HTTP status → semantic code (keyword) → semantic code (string).
 The mapping runs *after* the retry loop, so `retry.on_code` still matches
 against the raw semantic codes.
+
+### Compensation
+
+Steps that mutate remote state can declare a `compensation:` block — a
+mini-step (URL + method + input/body mappings) that runs iff the step
+succeeded and a later critical step failed. Compensations run in reverse
+completion order and are best-effort: their own failures are logged but
+never mask the original chain failure.
+
+```yaml
+backend_chain:
+  - id: create_customer
+    url: "{service_base}/portal/customers"
+    method: POST
+    critical: true
+    body_mapping:
+      email: {source: args, key: email}
+    compensation:
+      url:    "{service_base}/portal/customers/{customer_id}"
+      method: DELETE
+      input_mapping:
+        customer_id: {source: step, step_id: create_customer, jq: ".data.id"}
+
+  - id: create_equipment
+    url: "{service_base}/portal/equipment"
+    method: POST
+    critical: true
+    deps: [create_customer]
+    body_mapping:
+      customerId: {source: step, step_id: create_customer, jq: ".data.id"}
+```
+
+If `create_equipment` fails, `create_customer`'s compensation fires — the
+customer created moments earlier gets deleted before the failure surfaces
+to the client. Compensations never run when the whole chain succeeds.
+
+Failed steps have nothing to compensate — only successful steps' rollbacks
+are recorded and run.
 
 ### Retryable error codes
 

@@ -32,6 +32,26 @@ only starts after wave N completes.
   still run with `nil` data from this step, and errors appear in the GraphQL
   `errors` array alongside whatever data was successfully resolved.
 
+## Compensation (cascading rollback)
+
+Any step can declare a `compensation:` block — a mini-step that undoes its
+side effect if the chain later fails. Semantics:
+
+- The compensation is **recorded** when the step succeeds. Failed steps never
+  contribute a compensation (there is nothing to undo).
+- Compensations run **only** when a critical step later fails. A fully
+  successful chain never fires any compensation.
+- On failure, all recorded compensations run in **reverse completion order**
+  (LIFO) against the final `chain-ctx`, so a compensation can reference the
+  data of the step it's undoing via `{source: step, ...}`.
+- Compensations are **best effort**. Their own errors are logged and swallowed
+  — a failed rollback never masks or replaces the original chain error.
+- The original critical-step exception surfaces to the caller **after** all
+  compensations have run.
+
+See [spec.md — Compensation](spec.md#compensation) for the syntax and a full
+onboarding example.
+
 ## Error handling
 
 ### Partial failure response

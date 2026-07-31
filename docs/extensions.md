@@ -46,7 +46,7 @@ extensions config. In Clojure it is a plain map:
    :validators   {"check-order"       order-validator}      ; keyed
    :transformers {"attach-warnings"   warnings-transformer}
    :resolvers    {"user-profile"      user-profile-resolver}
-   :retry-hooks  {"cmap-token-refresh" token-refresh-hook}
+   :retry-hooks  {"auth-token-refresh" token-refresh-hook}
    :cache         redis-cache-store})
 ```
 
@@ -59,7 +59,7 @@ BffConfig config = BffConfig.builder()
     .validator("check-order",       orderValidator)
     .transformer("attach-warnings", warningsTransformer)
     .resolver("user-profile",       userProfileResolver)
-    .retryHook("cmap-token-refresh", tokenRefreshHook)
+    .retryHook("auth-token-refresh", tokenRefreshHook)
     .cache(redisCacheStore)
     .build();
 ```
@@ -525,13 +525,13 @@ The step spec:
 
 ```yaml
 - id: fetch_customer
-  url: "{cmap_base}/portal/customers/{id}"
+  url: "{service_base}/portal/customers/{id}"
   method: GET
   retry:
     max: 2
     on_code: [unauthorized]
     before_retry:
-      key: cmap-token-refresh
+      key: auth-token-refresh
 ```
 
 See [spec.md](spec.md#retryable-error-codes) for the list of codes accepted
@@ -563,9 +563,9 @@ current one.
 ```clojure
 (ns my.project.retry)
 
-(defn cmap-token-refresh
+(defn auth-token-refresh
   [{:keys [request-ctx]}]
-  (let [fresh-token (cmap-client/refresh-service-token!)]
+  (let [fresh-token (auth-client/refresh-service-token!)]
     (assoc request-ctx :authorization (str "Bearer " fresh-token))))
 ```
 
@@ -573,20 +573,20 @@ current one.
 retry:
   before_retry:
     ns: my.project.retry
-    fn: cmap-token-refresh
+    fn: auth-token-refresh
 ```
 
 ### Clojure — by key
 
 ```clojure
 (bff/create-handler "spec.yaml"
-  {:retry-hooks {"cmap-token-refresh" cmap-token-refresh}})
+  {:retry-hooks {"auth-token-refresh" auth-token-refresh}})
 ```
 
 ```yaml
 retry:
   before_retry:
-    key: cmap-token-refresh
+    key: auth-token-refresh
 ```
 
 ### Java — interface
@@ -597,9 +597,9 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class TokenRefreshHook implements BffRetryHook {
-    private final CmapTokenService tokens;
+    private final AuthTokenService tokens;
 
-    public TokenRefreshHook(CmapTokenService tokens) { this.tokens = tokens; }
+    public TokenRefreshHook(AuthTokenService tokens) { this.tokens = tokens; }
 
     @Override
     public Map<String, Object> beforeRetry(Map<String, Object> failureContext) {
@@ -612,7 +612,7 @@ public class TokenRefreshHook implements BffRetryHook {
 }
 ```
 
-Register on the builder: `.retryHook("cmap-token-refresh", new TokenRefreshHook(tokens))`.
+Register on the builder: `.retryHook("auth-token-refresh", new TokenRefreshHook(tokens))`.
 
 ---
 

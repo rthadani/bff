@@ -30,7 +30,13 @@ jobs:
           restore-keys: ${{ runner.os }}-clojure-
 
       - name: Compile Java interfaces
-        run: clojure -T:build compile-java
+        run: |
+          for i in 1 2 3; do
+            clojure -T:build compile-java && exit 0
+            echo "compile-java attempt $i failed, retrying..." >&2
+            sleep 3
+          done
+          exit 1
 
       - name: Run tests
         run: clojure -M:test

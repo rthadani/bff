@@ -15,12 +15,8 @@
 (def ^:private base-step
   {:id "s" :url "http://api" :method "GET" :deps []})
 
-(def ^:private base-endpoint
-  {:backend_chain  [base-step]
-   :output_mapping {}})
-
 ;; ---------------------------------------------------------------------------
-;; should-retry?
+;; should-retry? — pure fn, unaffected by the sweep
 ;; ---------------------------------------------------------------------------
 
 (deftest test-should-retry-nil-config-never-retries
@@ -48,13 +44,13 @@
                                     (http/err :unauthorized "401") 0)))))
 
 ;; ---------------------------------------------------------------------------
-;; End-to-end via execute-graph
+;; End-to-end via execute-graph (uses the new extensions map)
 ;; ---------------------------------------------------------------------------
 
 (deftest test-step-with-no-retry-config-called-once
   (let [calls (atom 0)]
     (with-redefs [http/call (fn [_] (swap! calls inc) (http/err :timeout "t"))]
-      (run-sync! (executor/execute-graph [base-step] {} {}))
+      (run-sync! (executor/execute-graph [base-step] {} {} {}))
       (is (= 1 @calls)))))
 
 (deftest test-step-retries-on-matching-code-and-recovers
@@ -65,7 +61,7 @@
                               (if (= 1 @calls)
                                 (http/err :unauthorized "401")
                                 (http/ok {:recovered true})))]
-      (let [ctx (run-sync! (executor/execute-graph [step] {} {}))]
+      (let [ctx (run-sync! (executor/execute-graph [step] {} {} {}))]
         (is (= 2 @calls))
         (is (= :ok (get-in ctx [:s :status])))))))
 
@@ -75,7 +71,7 @@
     (with-redefs [http/call (fn [_]
                               (swap! calls inc)
                               (http/err :unauthorized "401"))]
-      (let [ctx (run-sync! (executor/execute-graph [step] {} {}))]
+      (let [ctx (run-sync! (executor/execute-graph [step] {} {} {}))]
         (is (= 3 @calls) "1 initial + 2 retries")
         (is (= :error (get-in ctx [:s :status])))))))
 
@@ -85,22 +81,22 @@
     (with-redefs [http/call (fn [_]
                               (swap! calls inc)
                               (http/err :not-found "404"))]
-      (run-sync! (executor/execute-graph [step] {} {}))
+      (run-sync! (executor/execute-graph [step] {} {} {}))
       (is (= 1 @calls)))))
 
 ;; ---------------------------------------------------------------------------
-;; before-retry hook
+;; before-retry hook — passed via extensions {:retry-hooks {"k" impl}}
 ;; ---------------------------------------------------------------------------
 
 (deftest test-before-retry-hook-receives-failure-context
   (let [seen (atom nil)
         step (assoc base-step
                     :retry {:max 1 :on_code [:unauthorized]
-                            :before_retry {:key "capture-hook"}})]
-    (retry/register-retry-hook! "capture-hook"
-      (fn [ctx] (reset! seen ctx) nil))
+                            :before_retry {:key "capture-hook"}})
+        exts {:retry-hooks {"capture-hook" (fn [ctx] (reset! seen ctx) nil)}}]
     (with-redefs [http/call (fn [_] (http/err :unauthorized "401"))]
-      (run-sync! (executor/execute-graph [step] {:userId "u1"} {:authorization "old"}))
+      (run-sync! (executor/execute-graph
+                   [step] {:userId "u1"} {:authorization "old"} exts))
       (is (= :s      (:step-id     @seen)))
       (is (= 1       (:attempt     @seen)))
       (is (= {:userId "u1"} (:args @seen)))
@@ -111,25 +107,28 @@
   (let [seen-headers (atom [])
         step (assoc base-step
                     :retry {:max 1 :on_code [:unauthorized]
-                            :before_retry {:key "refresh-hook"}})]
-    (retry/register-retry-hook! "refresh-hook"
-      (fn [ctx] (assoc (:request-ctx ctx) :authorization "Bearer fresh")))
+                            :before_retry {:key "refresh-hook"}})
+        exts {:retry-hooks
+              {"refresh-hook" (fn [ctx]
+                                (assoc (:request-ctx ctx) :authorization "Bearer fresh"))}}]
     (with-redefs [http/call (fn [{:keys [headers]}]
                               (swap! seen-headers conj (get headers "authorization"))
                               (http/err :unauthorized "401"))]
-      (run-sync! (executor/execute-graph [step] {} {:authorization "Bearer stale"}))
+      (run-sync! (executor/execute-graph
+                   [step] {} {:authorization "Bearer stale"} exts))
       (is (= ["Bearer stale" "Bearer fresh"] @seen-headers)))))
 
 (deftest test-before-retry-hook-returning-nil-reuses-current-ctx
   (let [seen-headers (atom [])
         step (assoc base-step
                     :retry {:max 1 :on_code [:unauthorized]
-                            :before_retry {:key "noop-hook"}})]
-    (retry/register-retry-hook! "noop-hook" (fn [_] nil))
+                            :before_retry {:key "noop-hook"}})
+        exts {:retry-hooks {"noop-hook" (fn [_] nil)}}]
     (with-redefs [http/call (fn [{:keys [headers]}]
                               (swap! seen-headers conj (get headers "authorization"))
                               (http/err :unauthorized "401"))]
-      (run-sync! (executor/execute-graph [step] {} {:authorization "Bearer x"}))
+      (run-sync! (executor/execute-graph
+                   [step] {} {:authorization "Bearer x"} exts))
       (is (= ["Bearer x" "Bearer x"] @seen-headers)))))
 
 (deftest test-before-retry-hook-unknown-key-throws
@@ -138,7 +137,7 @@
                             :before_retry {:key "does-not-exist"}})]
     (with-redefs [http/call (fn [_] (http/err :unauthorized "401"))]
       (is (thrown? clojure.lang.ExceptionInfo
-                   (run-sync! (executor/execute-graph [step] {} {})))))))
+                   (run-sync! (executor/execute-graph [step] {} {} {})))))))
 
 (deftest test-before-retry-hook-ns-fn-form
   (let [step (assoc base-step
@@ -146,6 +145,7 @@
                             :before_retry {:ns "bff.retry-test"
                                            :fn "sample-hook"}})]
     (with-redefs [http/call (fn [_] (http/err :unauthorized "401"))]
-      (run-sync! (executor/execute-graph [step] {} {:authorization "old"})))))
+      (run-sync! (executor/execute-graph
+                   [step] {} {:authorization "old"} {})))))
 
 (defn sample-hook [_ctx] nil)

@@ -7,6 +7,7 @@
             [bff.cache :as cache]
             [bff.enricher :as enricher]
             [bff.interop :as interop]
+            [bff.registry :as registry]
             [bff.retry :as retry]
             [bff.validator :as validator]
             [clojure.string :as str]
@@ -42,7 +43,7 @@
     (->> param-mapping
          (map (fn [[k v]]
                 [k (resolve-value v args chain-ctx request-ctx)]))
-         (remove (fn [[_ v]] (nil? v)))   ; drop unresolvable params
+         (remove (fn [[_ v]] (nil? v)))
          (into {}))))
 
 (defn- interpolate-url
@@ -53,7 +54,6 @@
                (fn [[_ k]]
                  (let [kw (keyword k)]
                    (str (or (get args kw)
-                            ;; search completed step data for the key
                             (->> (vals chain-ctx)
                                  (some #(get (error/safe-data %) kw)))
                             ""))))))
@@ -61,7 +61,7 @@
 (defn- execute-step
   "Execute one backend chain step. Returns a tagged result map.
    Never throws — errors are captured in the result."
-  [step args chain-ctx request-ctx]
+  [step args chain-ctx request-ctx cache-store]
   (let [step-id   (keyword (:id step))
         url       (interpolate-url (:url step) args chain-ctx)
         method    (keyword (str/lower-case (:method step "GET")))
@@ -74,7 +74,7 @@
         cache-key (when cache-cfg
                     (interpolate-url (:key cache-cfg) args chain-ctx))]
     (log/infof "Step [%s] → %s %s" (name step-id) (str/upper-case (name method)) url)
-    (or (when cache-key (cache/lookup cache-key))
+    (or (when cache-key (cache/lookup cache-store cache-key))
         (let [result (http/call {:method  method
                                  :url     url
                                  :params  params
@@ -82,34 +82,38 @@
                                  :headers headers
                                  :step-id step-id})]
           (when (and cache-key (= :ok (:status result)))
-            (cache/save cache-key result (:ttl cache-cfg 60000)))
+            (cache/save cache-store cache-key result (:ttl cache-cfg 60000)))
           result))))
 
 (defn- execute-step-with-retry
   "Run a step and, if it declares a :retry policy, re-run it up to :max more
    times when the result's error code matches :on_code. An optional
    :before_retry hook is invoked between attempts and can rewrite the
-   request-ctx (e.g. inject a refreshed auth token)."
-  [step args chain-ctx request-ctx]
-  (if-let [retry-cfg (:retry step)]
-    (loop [attempt     0
-           current-ctx request-ctx]
-      (let [result (execute-step step args chain-ctx current-ctx)]
-        (if (retry/should-retry? retry-cfg result attempt)
-          (let [next-attempt (inc attempt)
-                new-ctx (retry/apply-before-retry
-                          retry-cfg
-                          {:step-id     (keyword (:id step))
-                           :attempt     next-attempt
-                           :args        args
-                           :chain-ctx   chain-ctx
-                           :request-ctx current-ctx
-                           :error       (:error result)})]
-            (log/infof "Step [%s] retry #%d after %s"
-                       (:id step) next-attempt (get-in result [:error :code]))
-            (recur next-attempt new-ctx))
-          result)))
-    (execute-step step args chain-ctx request-ctx)))
+   request-ctx (e.g. inject a refreshed auth token).
+
+   `extensions` supplies :cache and :retry-hooks."
+  [step args chain-ctx request-ctx extensions]
+  (let [{:keys [cache retry-hooks]} extensions]
+    (if-let [retry-cfg (:retry step)]
+      (loop [attempt     0
+             current-ctx request-ctx]
+        (let [result (execute-step step args chain-ctx current-ctx cache)]
+          (if (retry/should-retry? retry-cfg result attempt)
+            (let [next-attempt (inc attempt)
+                  new-ctx (retry/apply-before-retry
+                            retry-cfg
+                            {:step-id     (keyword (:id step))
+                             :attempt     next-attempt
+                             :args        args
+                             :chain-ctx   chain-ctx
+                             :request-ctx current-ctx
+                             :error       (:error result)}
+                            retry-hooks)]
+              (log/infof "Step [%s] retry #%d after %s"
+                         (:id step) next-attempt (get-in result [:error :code]))
+              (recur next-attempt new-ctx))
+            result)))
+      (execute-step step args chain-ctx request-ctx cache))))
 
 (defn- apply-error-mapping
   "If the step declares an :errors map and the result is an error, remap
@@ -129,7 +133,7 @@
     result))
 
 (defn- step->task
-  [step args chain-ctx-atom request-ctx]
+  [step args chain-ctx-atom request-ctx extensions]
   (m/sp
     (let [ctx       @chain-ctx-atom
           condition (:condition step)
@@ -137,37 +141,33 @@
                       (not (resolve-value condition args ctx request-ctx)))]
       (when-not skip?
         (let [raw    (m/? (m/via m/blk
-                                 (execute-step-with-retry step args ctx request-ctx)))
+                                 (execute-step-with-retry step args ctx request-ctx extensions)))
               result (apply-error-mapping step raw)]
           (swap! chain-ctx-atom assoc (keyword (:id step)) result)
           result)))))
 
 (defn- execute-wave
-  [wave args chain-ctx-atom request-ctx]
+  [wave args chain-ctx-atom request-ctx extensions]
   (if (= 1 (count wave))
-    (step->task (first wave) args chain-ctx-atom request-ctx)
+    (step->task (first wave) args chain-ctx-atom request-ctx extensions)
     (apply m/join
            (fn [& _results]
              @chain-ctx-atom)
-           (map #(step->task % args chain-ctx-atom request-ctx) wave))))
+           (map #(step->task % args chain-ctx-atom request-ctx extensions) wave))))
 
 (defn execute-graph
   "Execute the full backend_chain according to dependency waves.
    Returns a task that resolves to the final chain-ctx map.
 
-   Execution model:
-     • Steps with no unmet deps form a wave and run in PARALLEL (m/join)
-     • Waves are executed SEQUENTIALLY
-     • Step errors are captured in chain-ctx, never thrown
-     • Critical steps (if declared) can abort via error/throw-if-critical!"
-  [chain args request-ctx]
+   `extensions` is the caller-owned map with :cache and :retry-hooks."
+  [chain args request-ctx extensions]
   (let [waves          (graph/execution-waves chain)
         chain-ctx-atom (atom {})
         critical-steps (keep (fn [s] (when (:critical s) (:id s))) chain)]
     (log/debugf "Execution plan: %s" (graph/wave-summary waves))
     (m/sp
       (doseq [wave waves]
-        (m/? (execute-wave wave args chain-ctx-atom request-ctx))
+        (m/? (execute-wave wave args chain-ctx-atom request-ctx extensions))
         (error/throw-if-critical! @chain-ctx-atom critical-steps))
       @chain-ctx-atom)))
 
@@ -200,13 +200,6 @@
                  (interop/->java chain-ctx)
                  (interop/->java mapped)))))
 
-(defonce ^:private transformer-registry (atom {}))
-
-(defn register-transformer!
-  "Register a BffTransformer (or plain fn) under key k."
-  [k transformer]
-  (swap! transformer-registry assoc k transformer))
-
 (defprotocol BffResolver
   (resolve-endpoint [this args ctx]))
 
@@ -225,33 +218,12 @@
                (interop/->java args)
                (interop/->java ctx)))))
 
-(defonce ^:private resolver-registry (atom {}))
-
-(defn register-resolver!
-  "Register a BffResolver (or plain fn) under key k.
-   A registered resolver for an endpoint bypasses backend_chain entirely."
-  [k resolver]
-  (swap! resolver-registry assoc k resolver))
-
-(defn- resolve-transformer [transformer]
-  (if-let [k (:key transformer)]
-    (or (get @transformer-registry k)
-        (throw (ex-info (str "No transformer registered for key: " k)
-                        {:key k :registered (keys @transformer-registry)})))
-    (requiring-resolve (symbol (:ns transformer) (:fn transformer)))))
-
 (defn- apply-transformer
-  [transformer args chain-ctx mapped]
-  (if transformer
-    (transform (resolve-transformer transformer) args chain-ctx mapped)
+  [transformer-cfg args chain-ctx mapped transformers]
+  (if transformer-cfg
+    (transform (registry/resolve-impl transformer-cfg transformers "transformer")
+               args chain-ctx mapped)
     mapped))
-
-(defn- resolve-resolver [resolver-cfg]
-  (if-let [k (:key resolver-cfg)]
-    (or (get @resolver-registry k)
-        (throw (ex-info (str "No resolver registered for key: " k)
-                        {:key k :registered (keys @resolver-registry)})))
-    (requiring-resolve (symbol (:ns resolver-cfg) (:fn resolver-cfg)))))
 
 (defn run-endpoint
   "Build and execute the full endpoint pipeline.
@@ -260,21 +232,32 @@
      {:data   {...}         ; the mapped output fields
       :errors [{...}]       ; any step errors (may be empty)}
 
-   If the endpoint has a :resolver key, it is called instead of the
-   backend_chain. The resolver owns the full {:data :errors} response.
+   `extensions` is the caller-owned config map. Keys (all optional):
+     :enrichers    — ordered seq of context enrichers
+     :validators   — {\"key\" impl} for :validator {:key ...} refs
+     :transformers — {\"key\" impl}
+     :resolvers    — {\"key\" impl}
+     :retry-hooks  — {\"key\" impl}
+     :cache        — a CacheStore, or nil
 
-   Partial failures are represented in :errors while :data contains
-   whatever fields could be resolved from successful steps."
-  [endpoint args request-ctx]
+   If the endpoint has a :resolver key, it is called instead of the
+   backend_chain. Partial failures are represented in :errors while :data
+   contains whatever fields could be resolved from successful steps."
+  [endpoint args request-ctx extensions]
   (m/sp
-    (let [request-ctx (enricher/enrich-ctx request-ctx)]
-      (if-let [val-errors (validator/run-validation endpoint args request-ctx)]
+    (let [request-ctx (enricher/enrich-ctx request-ctx (:enrichers extensions))]
+      (if-let [val-errors (validator/run-validation endpoint args request-ctx
+                                                    (:validators extensions))]
         {:data nil :errors val-errors}
         (if-let [resolver-cfg (:resolver endpoint)]
-          (resolve-endpoint (resolve-resolver resolver-cfg) args request-ctx)
+          (resolve-endpoint (registry/resolve-impl resolver-cfg
+                                                   (:resolvers extensions)
+                                                   "resolver")
+                            args request-ctx)
           (let [chain-ctx (m/? (execute-graph (:backend_chain endpoint)
                                               args
-                                              request-ctx))
+                                              request-ctx
+                                              extensions))
                 errors    (error/step-errors chain-ctx)
                 mapped    (apply-output-mapping (:output_mapping endpoint)
                                                 args
@@ -283,6 +266,7 @@
                 final     (apply-transformer (:transformer endpoint)
                                              args
                                              chain-ctx
-                                             mapped)]
+                                             mapped
+                                             (:transformers extensions))]
             {:data   final
              :errors errors}))))))

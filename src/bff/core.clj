@@ -88,22 +88,34 @@
   "Load spec-path and return a Ring handler ready to mount in any server.
    Use this when embedding BFF as a library in your own application.
 
+   `extensions` is the immutable extension config for this handler. Keys
+   (all optional):
+
+     :enrichers    — ordered seq of context enrichers
+     :validators   — {\"key\" impl} looked up by :validator {:key ...} refs
+     :transformers — {\"key\" impl}
+     :resolvers    — {\"key\" impl}
+     :retry-hooks  — {\"key\" impl}
+     :cache        — a bff.cache/CacheStore, or nil
+
    Example:
-     (require '[bff.core :as bff]
-              '[bff.executor :as executor])
+     (require '[bff.core :as bff])
 
-     (executor/register-transformer! \"my-transform\" my-transform-fn)
-
-     (def handler (bff/create-handler \"my-spec.yaml\"))
+     (def handler
+       (bff/create-handler
+         \"my-spec.yaml\"
+         {:validators {\"check-order\" my-validator}
+          :cache      my-cache-store}))
 
      ;; plug handler into your existing Ring/Jetty/http-kit server"
-  [spec-path]
-  (log/infof "Loading spec: %s" spec-path)
-  (let [spec         (loader/load-and-compile spec-path)
-        schema       (schema-builder/build-schema spec)
-        fwd-headers  (let [h (:forward_headers spec)]
-                       (if (seq h) h default-forward-headers))]
-    (log/infof "Schema loaded: %d endpoints, forwarding headers: %s"
-               (count (:endpoints spec)) fwd-headers)
-    (build-handler schema fwd-headers)))
+  ([spec-path] (create-handler spec-path {}))
+  ([spec-path extensions]
+   (log/infof "Loading spec: %s" spec-path)
+   (let [spec         (loader/load-and-compile spec-path)
+         schema       (schema-builder/build-schema spec extensions)
+         fwd-headers  (let [h (:forward_headers spec)]
+                        (if (seq h) h default-forward-headers))]
+     (log/infof "Schema loaded: %d endpoints, forwarding headers: %s"
+                (count (:endpoints spec)) fwd-headers)
+     (build-handler schema fwd-headers))))
 

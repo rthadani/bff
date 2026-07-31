@@ -10,7 +10,9 @@
    The hook is called before each retry attempt with a failure-context map;
    its return value replaces the request-ctx used for the next call. Common
    use case: refresh a bearer token and inject it into the Authorization
-   header before the retry.")
+   header before the retry."
+  (:require [bff.interop :as interop]
+            [bff.registry :as registry]))
 
 (defprotocol BffRetryHook
   (before-retry [this failure-context]
@@ -24,19 +26,12 @@
   clojure.lang.IFn
   (before-retry [f ctx] (f ctx)))
 
-(defonce ^:private hook-registry (atom {}))
-
-(defn register-retry-hook!
-  "Register a BffRetryHook (or plain fn) under key k."
-  [k hook]
-  (swap! hook-registry assoc k hook))
-
-(defn- resolve-hook [hook-cfg]
-  (if-let [k (:key hook-cfg)]
-    (or (get @hook-registry k)
-        (throw (ex-info (str "No retry hook registered for key: " k)
-                        {:key k :registered (keys @hook-registry)})))
-    (requiring-resolve (symbol (:ns hook-cfg) (:fn hook-cfg)))))
+;; Java implementations of io.github.rthadani.bff.BffRetryHook are first-class.
+(extend-type io.github.rthadani.bff.BffRetryHook
+  BffRetryHook
+  (before-retry [this ctx]
+    (some-> (.beforeRetry this (interop/->java ctx))
+            interop/->clj)))
 
 (defn- code-matches?
   [result on-codes]
@@ -55,11 +50,12 @@
          (< attempt (:max retry-cfg 0)))))
 
 (defn apply-before-retry
-  "Run the before-retry hook if declared. Returns the request-ctx to use for
-   the next attempt (either the hook's return value or the current ctx)."
-  [retry-cfg failure-context]
+  "Run the before-retry hook if declared, resolving it against `retry-hooks`
+   (a map \"key\" → impl). Returns the request-ctx to use for the next
+   attempt — either the hook's return value or the current ctx."
+  [retry-cfg failure-context retry-hooks]
   (if-let [hook-cfg (:before_retry retry-cfg)]
-    (let [hook (resolve-hook hook-cfg)]
+    (let [hook (registry/resolve-impl hook-cfg retry-hooks "retry hook")]
       (or (before-retry hook failure-context)
           (:request-ctx failure-context)))
     (:request-ctx failure-context)))

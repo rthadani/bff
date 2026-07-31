@@ -16,78 +16,65 @@
   {:backend_chain [{:id "s" :url "http://test.example/api" :method "GET" :deps []}]
    :output_mapping {}})
 
+(defn- rv
+  "Convenience: run-validation with an empty validators registry."
+  ([endpoint args ctx]              (validator/run-validation endpoint args ctx {}))
+  ([endpoint args ctx validators]   (validator/run-validation endpoint args ctx validators)))
+
 ;; ---------------------------------------------------------------------------
 ;; built-in — pattern
 ;; ---------------------------------------------------------------------------
 
 (deftest test-pattern-valid-passes
-  (is (nil? (validator/run-validation
-              (assoc-in base-endpoint [:args :id :validate] {:pattern "^[a-z]+$"})
-              {:id "abc"}
-              {}))))
+  (is (nil? (rv (assoc-in base-endpoint [:args :id :validate] {:pattern "^[a-z]+$"})
+                {:id "abc"} {}))))
 
 (deftest test-pattern-invalid-returns-error
-  (let [errors (validator/run-validation
-                 (assoc-in base-endpoint [:args :id :validate]
-                           {:pattern "^[a-z]+$" :message "letters only"})
-                 {:id "ABC123"}
-                 {})]
+  (let [errors (rv (assoc-in base-endpoint [:args :id :validate]
+                             {:pattern "^[a-z]+$" :message "letters only"})
+                   {:id "ABC123"} {})]
     (is (= 1 (count errors)))
     (is (= "letters only" (:message (first errors))))))
 
 (deftest test-pattern-default-message-used-when-none-given
-  (let [errors (validator/run-validation
-                 (assoc-in base-endpoint [:args :id :validate] {:pattern "^[a-z]+$"})
-                 {:id "123"}
-                 {})]
+  (let [errors (rv (assoc-in base-endpoint [:args :id :validate] {:pattern "^[a-z]+$"})
+                   {:id "123"} {})]
     (is (= 1 (count errors)))
     (is (string? (:message (first errors))))))
 
 (deftest test-nil-value-skipped-by-pattern
-  (is (nil? (validator/run-validation
-              (assoc-in base-endpoint [:args :id :validate] {:pattern "^[a-z]+$"})
-              {:id nil}
-              {}))))
+  (is (nil? (rv (assoc-in base-endpoint [:args :id :validate] {:pattern "^[a-z]+$"})
+                {:id nil} {}))))
 
 ;; ---------------------------------------------------------------------------
 ;; built-in — min / max
 ;; ---------------------------------------------------------------------------
 
 (deftest test-min-valid-passes
-  (is (nil? (validator/run-validation
-              (assoc-in base-endpoint [:args :amount :validate] {:min 0})
-              {:amount 5}
-              {}))))
+  (is (nil? (rv (assoc-in base-endpoint [:args :amount :validate] {:min 0})
+                {:amount 5} {}))))
 
 (deftest test-min-invalid-returns-error
-  (let [errors (validator/run-validation
-                 (assoc-in base-endpoint [:args :amount :validate]
-                           {:min 0 :message "must be non-negative"})
-                 {:amount -1}
-                 {})]
+  (let [errors (rv (assoc-in base-endpoint [:args :amount :validate]
+                             {:min 0 :message "must be non-negative"})
+                   {:amount -1} {})]
     (is (= 1 (count errors)))
     (is (= "must be non-negative" (:message (first errors))))))
 
 (deftest test-max-invalid-returns-error
-  (let [errors (validator/run-validation
-                 (assoc-in base-endpoint [:args :amount :validate]
-                           {:max 100 :message "too large"})
-                 {:amount 200}
-                 {})]
+  (let [errors (rv (assoc-in base-endpoint [:args :amount :validate]
+                             {:max 100 :message "too large"})
+                   {:amount 200} {})]
     (is (= 1 (count errors)))
     (is (= "too large" (:message (first errors))))))
 
 (deftest test-min-and-max-both-pass
-  (is (nil? (validator/run-validation
-              (assoc-in base-endpoint [:args :amount :validate] {:min 0 :max 100})
-              {:amount 50}
-              {}))))
+  (is (nil? (rv (assoc-in base-endpoint [:args :amount :validate] {:min 0 :max 100})
+                {:amount 50} {}))))
 
 (deftest test-nil-value-skipped-by-min-max
-  (is (nil? (validator/run-validation
-              (assoc-in base-endpoint [:args :amount :validate] {:min 0 :max 100})
-              {:amount nil}
-              {}))))
+  (is (nil? (rv (assoc-in base-endpoint [:args :amount :validate] {:min 0 :max 100})
+                {:amount nil} {}))))
 
 ;; ---------------------------------------------------------------------------
 ;; multiple args — each validated independently
@@ -97,7 +84,7 @@
   (let [endpoint (-> base-endpoint
                      (assoc-in [:args :userId :validate] {:pattern "^u\\d+$"})
                      (assoc-in [:args :amount :validate] {:min 0 :max 1000}))]
-    (is (nil? (validator/run-validation endpoint {:userId "u42" :amount 100} {})))))
+    (is (nil? (rv endpoint {:userId "u42" :amount 100} {})))))
 
 (deftest test-multiple-args-both-invalid-returns-two-errors
   (let [endpoint (-> base-endpoint
@@ -105,55 +92,47 @@
                                {:pattern "^u\\d+$" :message "bad userId"})
                      (assoc-in [:args :amount :validate]
                                {:min 0 :message "bad amount"}))]
-    (is (= 2 (count (validator/run-validation
-                      endpoint {:userId "BAD" :amount -5} {}))))))
+    (is (= 2 (count (rv endpoint {:userId "BAD" :amount -5} {}))))))
 
 ;; ---------------------------------------------------------------------------
 ;; no validation declared — passes through
 ;; ---------------------------------------------------------------------------
 
 (deftest test-no-validation-rules-returns-nil
-  (is (nil? (validator/run-validation base-endpoint {:userId "anything"} {}))))
+  (is (nil? (rv base-endpoint {:userId "anything"} {}))))
 
 ;; ---------------------------------------------------------------------------
-;; custom validator
+;; custom validator — provided inline via `validators` argument
 ;; ---------------------------------------------------------------------------
 
 (deftest test-custom-validator-called-and-passes
-  (validator/register-validator! "test-pass" (fn [_ _] nil))
-  (is (nil? (validator/run-validation
-              (assoc base-endpoint :validator {:key "test-pass"})
-              {} {}))))
+  (is (nil? (rv (assoc base-endpoint :validator {:key "test-pass"})
+                {} {}
+                {"test-pass" (fn [_ _] nil)}))))
 
 (deftest test-custom-validator-returns-errors
-  (validator/register-validator! "test-fail"
-    (fn [_ _] [{:message "cross-field rule failed"}]))
-  (let [errors (validator/run-validation
-                 (assoc base-endpoint :validator {:key "test-fail"})
-                 {} {})]
+  (let [errors (rv (assoc base-endpoint :validator {:key "test-fail"})
+                   {} {}
+                   {"test-fail" (fn [_ _] [{:message "cross-field rule failed"}])})]
     (is (= 1 (count errors)))
     (is (= "cross-field rule failed" (:message (first errors))))))
 
 (deftest test-custom-validator-receives-args-and-ctx
   (let [received (atom nil)]
-    (validator/register-validator! "test-capture"
-      (fn [args ctx] (reset! received {:args args :ctx ctx}) nil))
-    (validator/run-validation
-      (assoc base-endpoint :validator {:key "test-capture"})
-      {:userId "u1"} {:authorization "Bearer tok"})
+    (rv (assoc base-endpoint :validator {:key "test-capture"})
+        {:userId "u1"} {:authorization "Bearer tok"}
+        {"test-capture" (fn [args ctx] (reset! received {:args args :ctx ctx}) nil)})
     (is (= {:userId "u1"} (:args @received)))
     (is (= {:authorization "Bearer tok"} (:ctx @received)))))
 
 (deftest test-custom-validator-unknown-key-throws
   (is (thrown? clojure.lang.ExceptionInfo
-               (validator/run-validation
-                 (assoc base-endpoint :validator {:key "not-registered-xyz"})
-                 {} {}))))
+               (rv (assoc base-endpoint :validator {:key "not-registered-xyz"})
+                   {} {}))))
 
 (deftest test-custom-validator-ns-fn-form
-  (validator/run-validation
-    (assoc base-endpoint :validator {:ns "bff.validator-test" :fn "passing-validator"})
-    {} {}))
+  (rv (assoc base-endpoint :validator {:ns "bff.validator-test" :fn "passing-validator"})
+      {} {}))
 
 (defn passing-validator [_ _] nil)
 
@@ -163,13 +142,12 @@
 
 (deftest test-custom-validator-protocol-implementation
   (let [impl (reify validator/BffValidator
-               (validate [_ _ _] [{:message "from protocol"}]))]
-    (validator/register-validator! "test-protocol-validator" impl)
-    (let [errors (validator/run-validation
-                   (assoc base-endpoint :validator {:key "test-protocol-validator"})
-                   {} {})]
-      (is (= 1 (count errors)))
-      (is (= "from protocol" (:message (first errors)))))))
+               (validate [_ _ _] [{:message "from protocol"}]))
+        errors (rv (assoc base-endpoint :validator {:key "test-protocol-validator"})
+                   {} {}
+                   {"test-protocol-validator" impl})]
+    (is (= 1 (count errors)))
+    (is (= "from protocol" (:message (first errors))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Java interface — io.github.rthadani.bff.BffValidator
@@ -179,14 +157,10 @@
   (testing "Java implementations receive String-keyed maps, not Clojure keywords"
     (let [seen (atom nil)
           impl (reify io.github.rthadani.bff.BffValidator
-                 (validate [_ args _ctx]
-                   (reset! seen args)
-                   nil))]
-      (validator/register-validator! "test-java-arg-keys" impl)
-      (validator/run-validation
-        (assoc base-endpoint :validator {:key "test-java-arg-keys"})
-        {:userId "u42" :amount 100}
-        {})
+                 (validate [_ args _ctx] (reset! seen args) nil))]
+      (rv (assoc base-endpoint :validator {:key "test-java-arg-keys"})
+          {:userId "u42" :amount 100} {}
+          {"test-java-arg-keys" impl})
       (is (instance? java.util.Map @seen))
       (is (= "u42" (.get ^java.util.Map @seen "userId")))
       (is (= 100   (.get ^java.util.Map @seen "amount"))))))
@@ -197,37 +171,34 @@
                  (validate [_ _ _]
                    (java.util.List/of
                      (doto (java.util.HashMap.)
-                       (.put "message" "java rejected")))))]
-      (validator/register-validator! "test-java-error-keys" impl)
-      (let [errors (validator/run-validation
-                     (assoc base-endpoint :validator {:key "test-java-error-keys"})
-                     {} {})]
-        (is (= 1 (count errors)))
-        (is (= "java rejected" (:message (first errors))))))))
+                       (.put "message" "java rejected")))))
+          errors (rv (assoc base-endpoint :validator {:key "test-java-error-keys"})
+                     {} {}
+                     {"test-java-error-keys" impl})]
+      (is (= 1 (count errors)))
+      (is (= "java rejected" (:message (first errors)))))))
 
 (deftest test-java-interface-validator-empty-list-passes
   (let [impl (reify io.github.rthadani.bff.BffValidator
                (validate [_ _ _] (java.util.List/of)))]
-    (validator/register-validator! "test-java-empty" impl)
-    (is (nil? (validator/run-validation
-                (assoc base-endpoint :validator {:key "test-java-empty"})
-                {} {})))))
+    (is (nil? (rv (assoc base-endpoint :validator {:key "test-java-empty"})
+                  {} {}
+                  {"test-java-empty" impl})))))
 
 ;; ---------------------------------------------------------------------------
 ;; builtin + custom combined
 ;; ---------------------------------------------------------------------------
 
 (deftest test-builtin-and-custom-errors-combined
-  (validator/register-validator! "test-extra-error"
-    (fn [_ _] [{:message "custom rule failed"}]))
   (let [endpoint (-> base-endpoint
                      (assoc-in [:args :id :validate]
                                {:pattern "^[a-z]+$" :message "pattern failed"})
-                     (assoc :validator {:key "test-extra-error"}))]
-    (let [errors (validator/run-validation endpoint {:id "123"} {})]
-      (is (= 2 (count errors)))
-      (is (some #(= "pattern failed" (:message %)) errors))
-      (is (some #(= "custom rule failed" (:message %)) errors)))))
+                     (assoc :validator {:key "test-extra-error"}))
+        errors   (rv endpoint {:id "123"} {}
+                     {"test-extra-error" (fn [_ _] [{:message "custom rule failed"}])})]
+    (is (= 2 (count errors)))
+    (is (some #(= "pattern failed" (:message %)) errors))
+    (is (some #(= "custom rule failed" (:message %)) errors))))
 
 ;; ---------------------------------------------------------------------------
 ;; integration — validation short-circuits run-endpoint
@@ -239,7 +210,7 @@
       (let [endpoint (assoc-in base-endpoint [:args :id :validate]
                                {:pattern "^[a-z]+$" :message "letters only"})
             {:keys [data errors]} (run-sync!
-                                    (executor/run-endpoint endpoint {:id "123"} {}))]
+                                    (executor/run-endpoint endpoint {:id "123"} {} {}))]
         (is (false? @called) "HTTP must not be called when validation fails")
         (is (nil? data))
         (is (= 1 (count errors)))
@@ -251,6 +222,6 @@
       (let [endpoint (assoc-in base-endpoint [:args :id :validate]
                                {:pattern "^[a-z]+$"})
             {:keys [errors]} (run-sync!
-                               (executor/run-endpoint endpoint {:id "abc"} {}))]
+                               (executor/run-endpoint endpoint {:id "abc"} {} {}))]
         (is (true? @called) "HTTP must be called when validation passes")
         (is (empty? errors))))))

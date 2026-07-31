@@ -84,11 +84,11 @@
      :extensions with-code}))
 
 (defn- make-resolver
-  [endpoint]
+  [endpoint extensions]
   (fn [ctx args _val]
     (let [request-ctx (or (:request ctx) {})
           {:keys [data errors]}
-          (run-task-sync (executor/run-endpoint endpoint args request-ctx))]
+          (run-task-sync (executor/run-endpoint endpoint args request-ctx extensions))]
       (if (seq errors)
         ;; Surface partial errors while still returning available data
         (resolve/resolve-as data (map error->graphql errors))
@@ -102,32 +102,37 @@
                  (:default v) (assoc :default-value (:default v)))]))
        (into {})))
 
-(defn- build-operation [endpoint]
+(defn- build-operation [endpoint extensions]
   {(keyword (:name endpoint))
    (cond-> {:type        (keyword (get-in endpoint [:output_type :name]))
             :description (:description endpoint "")
             :args        (build-args (:args endpoint {}))
-            :resolve     (error/wrap-resolver-errors (make-resolver endpoint))}
+            :resolve     (error/wrap-resolver-errors (make-resolver endpoint extensions))}
      (:deprecation_reason endpoint)
      (assoc :deprecated (:deprecation_reason endpoint)))})
 
 
 (defn build-schema
-  [spec]
-  (let [endpoints (-> spec :endpoints)
-        queries   (filter #(= (:type %) "query") endpoints)
-        mutations (filter #(= (:type %) "mutation") endpoints)
+  "Compile a Lacinia schema from `spec`. `extensions` is the caller-owned
+   config map ({:enrichers :validators :transformers :resolvers :retry-hooks
+   :cache}); it is closed over every resolver so runtime requests carry it
+   into bff.executor/run-endpoint."
+  ([spec] (build-schema spec {}))
+  ([spec extensions]
+   (let [endpoints (-> spec :endpoints)
+         queries   (filter #(= (:type %) "query") endpoints)
+         mutations (filter #(= (:type %) "mutation") endpoints)
 
-        objects   (->> endpoints
-                       (map #(collect-object-types (:output_type %)))
-                       (apply merge))
+         objects   (->> endpoints
+                        (map #(collect-object-types (:output_type %)))
+                        (apply merge))
 
-        input-objs (->> (get spec :input_types [])
-                        (map build-input-type)
-                        (apply merge {}))]
+         input-objs (->> (get spec :input_types [])
+                         (map build-input-type)
+                         (apply merge {}))]
 
-    (-> {:objects        objects
-         :input-objects  input-objs
-         :queries        (->> queries  (map build-operation) (apply merge {}))
-         :mutations      (->> mutations (map build-operation) (apply merge {}))}
-        schema/compile)))
+     (-> {:objects        objects
+          :input-objects  input-objs
+          :queries        (->> queries  (map #(build-operation % extensions)) (apply merge {}))
+          :mutations      (->> mutations (map #(build-operation % extensions)) (apply merge {}))}
+         schema/compile))))

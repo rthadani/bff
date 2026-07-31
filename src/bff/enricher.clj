@@ -11,7 +11,8 @@
    validator downstream can read them from ctx without repeating the
    lookup.
 
-   Enrichers run in registration order; each sees the accumulated ctx."
+   Enrichers are supplied to `bff.core/create-handler` as an ordered
+   sequence; each sees the accumulated ctx from earlier enrichers."
   (:require [bff.interop :as interop]))
 
 (defprotocol BffContextEnricher
@@ -31,27 +32,13 @@
     (some-> (.enrich this (interop/->java ctx))
             interop/->clj)))
 
-(defonce ^:private enrichers (atom []))
-
-(defn register-enricher!
-  "Append an enricher to the ordered chain. Enrichers run in registration
-   order; each sees the ctx after every earlier enricher has run."
-  [enricher]
-  (swap! enrichers conj enricher))
-
-(defn reset-enrichers!
-  "Clear all registered enrichers. Primarily for tests."
-  []
-  (reset! enrichers []))
-
 (defn enrich-ctx
-  "Fold every registered enricher over ctx. An enricher's return value
-   is merged into the accumulated ctx; nil or a non-map return is
-   ignored."
-  [ctx]
+  "Fold `enrichers` (an ordered seq) over `ctx`. An enricher's return value
+   is merged into the accumulated ctx; nil or a non-map return is ignored."
+  [ctx enrichers]
   (reduce
     (fn [acc enricher]
       (let [added (enrich enricher acc)]
         (if (map? added) (merge acc added) acc)))
     (or ctx {})
-    @enrichers))
+    (or enrichers [])))

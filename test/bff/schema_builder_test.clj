@@ -252,7 +252,7 @@
 
 (deftest test-resolver-returns-executor-data
   (let [schema (sb/build-schema ping-spec)]
-    (with-redefs [executor/run-endpoint (fn [_ _ _] (m/sp {:data {:message "pong"} :errors []}))]
+    (with-redefs [executor/run-endpoint (fn [_ _ _ _] (m/sp {:data {:message "pong"} :errors []}))]
       (let [result (lacinia/execute schema "{ ping { message } }" {} {})]
         (is (nil? (:errors result)))
         (is (= "pong" (get-in result [:data :ping :message])))))))
@@ -260,7 +260,7 @@
 (deftest test-resolver-surfaces-step-errors
   (let [schema (sb/build-schema ping-spec)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ _ _]
+                  (fn [_ _ _ _]
                     (m/sp {:data   nil
                            :errors [{:message    "step failed"
                                      :extensions {:code :not-found :step "s"}}]}))]
@@ -272,7 +272,7 @@
   (let [schema        (sb/build-schema full-spec)
         received-args (atom nil)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ args _]
+                  (fn [_ args _ _]
                     (reset! received-args args)
                     (m/sp {:data {:id "u1" :name nil} :errors []}))]
       (lacinia/execute schema "{ getUser(userId: \"u1\") { id } }" {} {})
@@ -282,8 +282,19 @@
   (let [schema   (sb/build-schema ping-spec)
         received (atom nil)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ _ request-ctx]
+                  (fn [_ _ request-ctx _]
                     (reset! received request-ctx)
                     (m/sp {:data {:message "ok"} :errors []}))]
       (lacinia/execute schema "{ ping { message } }" {} {:request {:authorization "Bearer tok"}})
       (is (= {:authorization "Bearer tok"} @received)))))
+
+(deftest test-build-schema-passes-extensions-to-run-endpoint
+  (let [schema     (sb/build-schema ping-spec
+                                    {:validators {"my-validator" (fn [_ _] nil)}})
+        received-exts (atom nil)]
+    (with-redefs [executor/run-endpoint
+                  (fn [_ _ _ extensions]
+                    (reset! received-exts extensions)
+                    (m/sp {:data {:message "ok"} :errors []}))]
+      (lacinia/execute schema "{ ping { message } }" {} {})
+      (is (contains? (:validators @received-exts) "my-validator")))))

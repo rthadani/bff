@@ -8,6 +8,7 @@
 #   - Transformer function reference
 #   - Built-in arg validation (pattern, min, max)
 #   - Custom validator reference
+#   - Custom scalar type (DateTime)
 
 # Base URL for upstream services. Set API_BASE_URL to point at each environment.
 #   API_BASE_URL=https://api.prod.internal clj -M -m bff.core
@@ -18,6 +19,12 @@ forward_headers:
   - authorization
   - x-request-id
   - x-correlation-id
+
+# Custom scalar types. Each name must have a matching implementation supplied
+# under :scalars in the handler config — see demo/main.clj for the wiring.
+scalars:
+  - name: DateTime
+    description: "ISO-8601 timestamp, e.g. 2026-07-30T18:00:00Z"
 
 # Optional top-level input types (for mutation args)
 input_types:
@@ -165,7 +172,7 @@ endpoints:
         orderId:           String!
         status:            String!
         totalAmount:       Float!
-        estimatedDelivery: String
+        estimatedDelivery: DateTime          # custom scalar declared above
         notificationSent:  Boolean
         inventoryReserved: Boolean
         warnings:          "[String]"

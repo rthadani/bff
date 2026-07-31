@@ -1,6 +1,6 @@
 # Extensions
 
-Six extension points let you plug custom logic into the request pipeline. All
+Seven extension points let you plug custom logic into the request pipeline. All
 extensions are supplied to `bff.core/create-handler` (or the Java
 `Bff.createHandler` / `Bff.createServlet` overloads) via a single immutable
 config — there is no global registry and no runtime registration.
@@ -19,6 +19,7 @@ boilerplate.
 | `resolver`         | Instead of the backend chain             | `resolver:`                          | `:resolvers`     | `io.github.rthadani.bff.BffResolver`              |
 | cache backend      | Around every cacheable step              | (single instance)                    | `:cache`         | `io.github.rthadani.bff.CacheStore`               |
 | retry hook         | Between step attempts (when retry fires) | inside a step's `retry.before_retry` | `:retry-hooks`   | `io.github.rthadani.bff.BffRetryHook`             |
+| custom scalar      | Every input coerce / output serialize    | top-level `scalars:` block           | `:scalars`       | `io.github.rthadani.bff.BffScalar`                |
 
 Java authors have two options at every extension point that ships with a base
 class:
@@ -612,3 +613,100 @@ public class TokenRefreshHook implements BffRetryHook {
 ```
 
 Register on the builder: `.retryHook("cmap-token-refresh", new TokenRefreshHook(tokens))`.
+
+---
+
+## Custom scalar
+
+Declare a scalar type in the spec's top-level `scalars:` block, then supply a
+`{parse, serialize}` implementation in the handler config under `:scalars`.
+The engine wires them into Lacinia's `:scalars` schema section at build time
+— they are indistinguishable from Lacinia's built-in `String`/`Int`/`Float`
+scalars from a client's perspective.
+
+- **parse** — client input (usually a string from JSON) → internal value.
+  Throw on invalid input; Lacinia surfaces the exception as a coercion error.
+- **serialize** — internal value → JSON primitive
+  (`String` / `Number` / `Boolean` / `nil`).
+
+```yaml
+scalars:
+  - name: DateTime
+    description: "ISO-8601 timestamp"
+  - name: Mac
+    description: "MAC address in colon-hex form"
+```
+
+If a spec declares a scalar with no matching entry in `:scalars`, the handler
+fails fast at `create-handler` time with `ex-info` naming the missing scalar.
+
+### Protocol
+
+```clojure
+(defprotocol BffScalar
+  (parse     [this value])
+  (serialize [this value]))
+```
+
+### Clojure — map form
+
+A plain map with `:parse` and `:serialize` keys satisfies the protocol:
+
+```clojure
+(def mac-scalar
+  {:parse     (fn [v]
+                (let [s (str/lower-case (str v))]
+                  (or (re-matches #"^([0-9a-f]{2}:){5}[0-9a-f]{2}$" s)
+                      (throw (ex-info (str "Not a MAC address: " v) {:value v})))
+                  s))
+   :serialize identity})
+
+(bff/create-handler "spec.yaml" {:scalars {"Mac" mac-scalar}})
+```
+
+### Built-in scalars
+
+`bff.scalar` ships four convenience scalars — drop them straight into the
+config:
+
+| Var                          | GraphQL type name (by convention) | Backed by                   |
+|------------------------------|-----------------------------------|-----------------------------|
+| `bff.scalar/date-time`       | `DateTime`                        | `java.time.Instant`         |
+| `bff.scalar/date`            | `Date`                            | `java.time.LocalDate`       |
+| `bff.scalar/local-date-time` | `LocalDateTime`                   | `java.time.LocalDateTime`   |
+| `bff.scalar/uuid`            | `Uuid`                            | `java.util.UUID`            |
+
+```clojure
+(require '[bff.scalar :as scalar])
+
+(bff/create-handler "spec.yaml"
+  {:scalars {"DateTime" scalar/date-time
+             "Date"     scalar/date
+             "Uuid"     scalar/uuid}})
+```
+
+### Java — interface
+
+```java
+import io.github.rthadani.bff.BffScalar;
+
+public class MacScalar implements BffScalar {
+    private static final java.util.regex.Pattern MAC =
+        java.util.regex.Pattern.compile("^([0-9a-f]{2}:){5}[0-9a-f]{2}$",
+                                        java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    @Override public Object parse(Object value) {
+        String s = value.toString().toLowerCase();
+        if (!MAC.matcher(s).matches()) {
+            throw new IllegalArgumentException("Not a MAC address: " + value);
+        }
+        return s;
+    }
+
+    @Override public Object serialize(Object value) {
+        return value.toString();
+    }
+}
+```
+
+Register on the builder: `.scalar("Mac", new MacScalar())`.

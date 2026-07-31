@@ -21,6 +21,10 @@ forward_headers:       # optional — headers forwarded to every backend step
   - authorization      # defaults to [authorization, x-request-id, x-correlation-id]
   - x-request-id
 
+scalars:               # optional — custom GraphQL scalar types
+  - name: DateTime     # implementation supplied in the handler's :scalars config
+    description: "ISO-8601 timestamp"
+
 input_types:           # optional — shared input object types for mutation args
   - name: MyInput
     fields:
@@ -30,6 +34,11 @@ input_types:           # optional — shared input object types for mutation arg
 endpoints:             # list of query and mutation definitions
   - ...
 ```
+
+Every name in the `scalars:` block must have a matching implementation
+supplied to `bff.core/create-handler` under the `:scalars` config key (or via
+`BffConfig.Builder#scalar` in Java). See
+[extensions.md — Custom scalar](extensions.md#custom-scalar) for the interface.
 
 ## Endpoint
 

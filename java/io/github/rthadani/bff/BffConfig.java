@@ -10,7 +10,7 @@ import java.util.Map;
 /**
  * Immutable configuration for a BFF handler. Holds every extension the engine
  * knows about — enrichers, validators, transformers, resolvers, retry hooks,
- * and the cache backend — and is passed once to
+ * the cache backend, and custom scalars — and is passed once to
  * {@link Bff#createHandler(String, BffConfig)} or
  * {@link Bff#createServlet(String, BffConfig)} at startup.
  *
@@ -23,39 +23,43 @@ import java.util.Map;
  *     .resolver("user-profile", new UserProfileResolver(userRepo))
  *     .retryHook("cmap-token-refresh", new TokenRefreshHook())
  *     .cache(new RedisCacheStore(redisTemplate))
+ *     .scalar("Mac", new MacScalar())
  *     .build();
  *
  * HttpServlet servlet = Bff.createServlet("bff-spec.yaml", config);
  * }</pre>
  *
  * <p>Enrichers are ordered by insertion. Validators, transformers, resolvers,
- * and retry hooks are keyed — the string key matches {@code {key: "..."}}
- * references in the YAML spec.
+ * retry hooks, and scalars are keyed — the string key matches {@code {key: "..."}}
+ * references (or scalar names) in the YAML spec.
  */
 public final class BffConfig {
 
     static final BffConfig EMPTY = new BffConfig(
-        List.of(), Map.of(), Map.of(), Map.of(), Map.of(), null);
+        List.of(), Map.of(), Map.of(), Map.of(), Map.of(), null, Map.of());
 
-    private final List<BffContextEnricher>  enrichers;
-    private final Map<String, BffValidator> validators;
+    private final List<BffContextEnricher>    enrichers;
+    private final Map<String, BffValidator>   validators;
     private final Map<String, BffTransformer> transformers;
-    private final Map<String, BffResolver>  resolvers;
-    private final Map<String, BffRetryHook> retryHooks;
-    private final CacheStore                cache;
+    private final Map<String, BffResolver>    resolvers;
+    private final Map<String, BffRetryHook>   retryHooks;
+    private final CacheStore                  cache;
+    private final Map<String, BffScalar>      scalars;
 
-    private BffConfig(List<BffContextEnricher>  enrichers,
-                      Map<String, BffValidator> validators,
+    private BffConfig(List<BffContextEnricher>    enrichers,
+                      Map<String, BffValidator>   validators,
                       Map<String, BffTransformer> transformers,
-                      Map<String, BffResolver>  resolvers,
-                      Map<String, BffRetryHook> retryHooks,
-                      CacheStore                cache) {
+                      Map<String, BffResolver>    resolvers,
+                      Map<String, BffRetryHook>   retryHooks,
+                      CacheStore                  cache,
+                      Map<String, BffScalar>      scalars) {
         this.enrichers    = enrichers;
         this.validators   = validators;
         this.transformers = transformers;
         this.resolvers    = resolvers;
         this.retryHooks   = retryHooks;
         this.cache        = cache;
+        this.scalars      = scalars;
     }
 
     public List<BffContextEnricher>    enrichers()    { return enrichers; }
@@ -64,16 +68,18 @@ public final class BffConfig {
     public Map<String, BffResolver>    resolvers()    { return resolvers; }
     public Map<String, BffRetryHook>   retryHooks()   { return retryHooks; }
     public CacheStore                  cache()        { return cache; }
+    public Map<String, BffScalar>      scalars()      { return scalars; }
 
     public static Builder builder() { return new Builder(); }
 
     public static final class Builder {
-        private final List<BffContextEnricher>  enrichers    = new ArrayList<>();
-        private final Map<String, BffValidator> validators   = new LinkedHashMap<>();
+        private final List<BffContextEnricher>    enrichers    = new ArrayList<>();
+        private final Map<String, BffValidator>   validators   = new LinkedHashMap<>();
         private final Map<String, BffTransformer> transformers = new LinkedHashMap<>();
-        private final Map<String, BffResolver>  resolvers    = new LinkedHashMap<>();
-        private final Map<String, BffRetryHook> retryHooks   = new LinkedHashMap<>();
-        private CacheStore                       cache;
+        private final Map<String, BffResolver>    resolvers    = new LinkedHashMap<>();
+        private final Map<String, BffRetryHook>   retryHooks   = new LinkedHashMap<>();
+        private final Map<String, BffScalar>      scalars      = new LinkedHashMap<>();
+        private CacheStore                        cache;
 
         private Builder() {}
 
@@ -113,6 +119,13 @@ public final class BffConfig {
             return this;
         }
 
+        /** Register a custom scalar by GraphQL type name (matches the entry in the
+         *  spec's top-level {@code scalars:} list). */
+        public Builder scalar(String name, BffScalar scalar) {
+            scalars.put(name, scalar);
+            return this;
+        }
+
         public BffConfig build() {
             return new BffConfig(
                 List.copyOf(enrichers),
@@ -120,7 +133,8 @@ public final class BffConfig {
                 unmodifiable(transformers),
                 unmodifiable(resolvers),
                 unmodifiable(retryHooks),
-                cache);
+                cache,
+                unmodifiable(scalars));
         }
 
         private static <K, V> Map<K, V> unmodifiable(Map<K, V> m) {

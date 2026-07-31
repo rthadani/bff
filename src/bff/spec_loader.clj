@@ -87,10 +87,16 @@
                      (compile-output-map v))]))
          (into {}))))
 
+(defn- compile-compensation [comp]
+  (some-> comp
+          (update :input_mapping compile-param-map)
+          (update :body_mapping  compile-param-map)))
+
 (defn- compile-step [step]
   (-> step
       (update :input_mapping compile-param-map)
-      (update :body_mapping  compile-param-map)))
+      (update :body_mapping  compile-param-map)
+      (update :compensation  compile-compensation)))
 
 (defn- preload-transformer! [transformer]
   (when (and transformer (:ns transformer))

@@ -133,43 +133,85 @@
     result))
 
 (defn- step->task
-  [step args chain-ctx-atom request-ctx extensions]
+  "Run one step against an immutable chain-ctx. Returns a map with the step's
+   result, or nil if the step was skipped by its :condition.
+
+     {:step-id      :keyword
+      :result       {:status :ok/:error ...}
+      :compensation {...}}      ; only present when the step succeeded and
+                                ;   declared a :compensation config"
+  [step args chain-ctx request-ctx extensions]
   (m/sp
-    (let [ctx       @chain-ctx-atom
-          condition (:condition step)
+    (let [condition (:condition step)
           skip?     (when condition
-                      (not (resolve-value condition args ctx request-ctx)))]
+                      (not (resolve-value condition args chain-ctx request-ctx)))]
       (when-not skip?
         (let [raw    (m/? (m/via m/blk
-                                 (execute-step-with-retry step args ctx request-ctx extensions)))
+                                 (execute-step-with-retry step args chain-ctx request-ctx extensions)))
               result (apply-error-mapping step raw)]
-          (swap! chain-ctx-atom assoc (keyword (:id step)) result)
-          result)))))
+          (cond-> {:step-id (keyword (:id step)) :result result}
+            (and (= :ok (:status result)) (:compensation step))
+            (assoc :compensation (:compensation step))))))))
 
 (defn- execute-wave
-  [wave args chain-ctx-atom request-ctx extensions]
-  (if (= 1 (count wave))
-    (step->task (first wave) args chain-ctx-atom request-ctx extensions)
-    (apply m/join
-           (fn [& _results]
-             @chain-ctx-atom)
-           (map #(step->task % args chain-ctx-atom request-ctx extensions) wave))))
+  "Run every step in the wave in parallel and return a seq of step->task
+   results with skipped (nil) entries removed."
+  [wave args chain-ctx request-ctx extensions]
+  (apply m/join
+         (fn [& results] (into [] (filter some?) results))
+         (map #(step->task % args chain-ctx request-ctx extensions) wave)))
+
+(defn- run-compensations
+  "Execute recorded compensations in reverse order. Each compensation is a
+   mini step (url + method + input_mapping + body_mapping + extra_headers)
+   that runs against the final chain-ctx. Errors are logged and swallowed —
+   compensation failure never masks the original chain failure."
+  [compensations args chain-ctx request-ctx extensions]
+  (when (seq compensations)
+    (log/infof "Chain failed — running %d compensation(s) in reverse order"
+               (count compensations)))
+  (doseq [{:keys [step-id compensation]} (reverse compensations)]
+    (try
+      (execute-step (assoc compensation :id (str "compensate-" (name step-id)))
+                    args chain-ctx request-ctx (:cache extensions))
+      (catch Exception e
+        (log/warnf "Compensation for step [%s] failed: %s"
+                   step-id (.getMessage e))))))
 
 (defn execute-graph
   "Execute the full backend_chain according to dependency waves.
    Returns a task that resolves to the final chain-ctx map.
 
-   `extensions` is the caller-owned map with :cache and :retry-hooks."
+   `extensions` is the caller-owned map with :cache and :retry-hooks.
+
+   Steps that succeed *and* declare a :compensation config are recorded;
+   if a later critical step fails, the recorded compensations run in
+   reverse order before the failure is re-thrown to the caller."
   [chain args request-ctx extensions]
   (let [waves          (graph/execution-waves chain)
-        chain-ctx-atom (atom {})
         critical-steps (keep (fn [s] (when (:critical s) (:id s))) chain)]
     (log/debugf "Execution plan: %s" (graph/wave-summary waves))
     (m/sp
-      (doseq [wave waves]
-        (m/? (execute-wave wave args chain-ctx-atom request-ctx extensions))
-        (error/throw-if-critical! @chain-ctx-atom critical-steps))
-      @chain-ctx-atom)))
+      (loop [remaining     waves
+             chain-ctx     {}
+             compensations []]
+        (if (empty? remaining)
+          chain-ctx
+          (let [results       (m/? (execute-wave (first remaining) args chain-ctx request-ctx extensions))
+                chain-ctx     (into chain-ctx
+                                    (map (juxt :step-id :result))
+                                    results)
+                compensations (into compensations
+                                    (keep (fn [{:keys [step-id compensation]}]
+                                            (when compensation
+                                              {:step-id step-id :compensation compensation})))
+                                    results)]
+            (try
+              (error/throw-if-critical! chain-ctx critical-steps)
+              (catch clojure.lang.ExceptionInfo e
+                (run-compensations compensations args chain-ctx request-ctx extensions)
+                (throw e)))
+            (recur (rest remaining) chain-ctx compensations)))))))
 
 (defn- apply-output-mapping
   [output-mapping args chain-ctx request-ctx]

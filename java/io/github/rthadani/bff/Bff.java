@@ -2,6 +2,7 @@ package io.github.rthadani.bff;
 
 import clojure.java.api.Clojure;
 import clojure.lang.IFn;
+import clojure.lang.Keyword;
 
 import jakarta.servlet.http.HttpServlet;
 
@@ -9,24 +10,24 @@ import jakarta.servlet.http.HttpServlet;
  * Static facade for embedding BFF from a Java application without direct calls
  * into {@code clojure.java.api}.
  *
- * <p>Typical Spring Boot 3 wiring:
+ * <p>The recommended flow is: build a {@link BffConfig} once at application
+ * startup, then hand it to {@link #createServlet(String, BffConfig)}. The
+ * config is immutable — no global state, no runtime registration.
  *
  * <pre>{@code
- * @Bean
- * public ServletRegistrationBean<HttpServlet> bffServlet() {
- *     Bff.registerValidator("check-order",  new OrderValidator());
- *     Bff.registerResolver ("user-profile", new UserProfileResolver(userRepo));
- *     Bff.registerCache(new RedisCacheStore(redisTemplate));
+ * BffConfig config = BffConfig.builder()
+ *     .enricher(new CustomerEnricher(redis))
+ *     .validator("check-order",  new OrderValidator())
+ *     .resolver ("user-profile", new UserProfileResolver(userRepo))
+ *     .cache(new RedisCacheStore(redisTemplate))
+ *     .build();
  *
- *     ServletRegistrationBean<HttpServlet> reg =
- *         new ServletRegistrationBean<>(Bff.createServlet("bff-spec.yaml"), "/graphql");
- *     reg.setName("bff");
- *     return reg;
+ * @Bean
+ * ServletRegistrationBean<HttpServlet> bffServlet(BffConfig config) {
+ *     return new ServletRegistrationBean<>(
+ *         Bff.createServlet("bff-spec.yaml", config), "/graphql");
  * }
  * }</pre>
- *
- * <p>All registrations must happen before the first {@code createHandler} /
- * {@code createServlet} call, since the spec is compiled at that point.
  */
 public final class Bff {
 
@@ -37,50 +38,47 @@ public final class Bff {
         return Clojure.var(ns, var);
     }
 
-    /** Register a validator implementation under {@code key}. */
-    public static void registerValidator(String key, BffValidator validator) {
-        resolveVar("bff.validator", "register-validator!").invoke(key, validator);
-    }
-
-    /** Register a transformer implementation under {@code key}. */
-    public static void registerTransformer(String key, BffTransformer transformer) {
-        resolveVar("bff.executor", "register-transformer!").invoke(key, transformer);
-    }
-
-    /** Register a resolver implementation under {@code key}. A registered resolver
-     *  bypasses the endpoint's {@code backend_chain} entirely. */
-    public static void registerResolver(String key, BffResolver resolver) {
-        resolveVar("bff.executor", "register-resolver!").invoke(key, resolver);
-    }
-
-    /** Register the process-wide cache backend. Only one is active at a time;
-     *  the most recent registration wins. Pass {@code null} to disable caching. */
-    public static void registerCache(CacheStore store) {
-        resolveVar("bff.cache", "register-cache!").invoke(store);
-    }
-
-    /** Append a context enricher to the ordered chain that runs at the top of
-     *  every GraphQL operation. Enrichers fire in registration order and each
-     *  sees the ctx accumulated by earlier enrichers. */
-    public static void registerContextEnricher(BffContextEnricher enricher) {
-        resolveVar("bff.enricher", "register-enricher!").invoke(enricher);
+    private static Object toExtensionsMap(BffConfig config) {
+        IFn hashMap = Clojure.var("clojure.core", "hash-map");
+        return hashMap.invoke(
+            Keyword.intern("enrichers"),    config.enrichers(),
+            Keyword.intern("validators"),   config.validators(),
+            Keyword.intern("transformers"), config.transformers(),
+            Keyword.intern("resolvers"),    config.resolvers(),
+            Keyword.intern("retry-hooks"),  config.retryHooks(),
+            Keyword.intern("cache"),        config.cache());
     }
 
     /**
-     * Load and compile the spec at {@code specPath} (classpath resource) and
-     * return the underlying Ring handler as a Clojure {@link IFn}. Use this if
-     * you already have a Ring-to-servlet bridge you prefer.
+     * Load and compile the spec at {@code specPath} with no extensions. Handy
+     * for smoke tests and specs that reference only ns/fn-form validators or
+     * transformers.
      */
     public static IFn createHandler(String specPath) {
-        return (IFn) resolveVar("bff.core", "create-handler").invoke(specPath);
+        return createHandler(specPath, BffConfig.EMPTY);
     }
 
     /**
-     * Load and compile the spec at {@code specPath} and return an
-     * {@link HttpServlet} ready to mount into any Jakarta Servlet 6 container —
-     * including Spring Boot 3 via {@code ServletRegistrationBean}.
+     * Load and compile the spec at {@code specPath} with the given extensions.
+     * The returned {@link IFn} is a Ring handler — invoke it with a Ring
+     * request map, or wrap it via {@link #createServlet(String, BffConfig)}.
      */
+    public static IFn createHandler(String specPath, BffConfig config) {
+        return (IFn) resolveVar("bff.core", "create-handler")
+                        .invoke(specPath, toExtensionsMap(config));
+    }
+
+    /** Load a spec with no extensions and return a ready-to-mount HttpServlet. */
     public static HttpServlet createServlet(String specPath) {
-        return new BffServlet(createHandler(specPath));
+        return createServlet(specPath, BffConfig.EMPTY);
+    }
+
+    /**
+     * Load a spec with the given extensions and return an {@link HttpServlet}
+     * ready to mount into any Jakarta Servlet 6 container — including Spring
+     * Boot 3 via {@code ServletRegistrationBean}.
+     */
+    public static HttpServlet createServlet(String specPath, BffConfig config) {
+        return new BffServlet(createHandler(specPath, config));
     }
 }

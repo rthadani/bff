@@ -79,7 +79,7 @@ endpoints:             # list of query and mutation definitions
     fn: my-validator-fn
   # or:
   validator:
-    key: my-validator             # look up a pre-registered instance
+    key: my-validator             # look up in the handler's :validators config
 
   # optional — transformer (runs after output_mapping is applied)
   transformer:

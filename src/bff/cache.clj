@@ -15,29 +15,32 @@
   (cache-put        [this key value ttl] (.put this key value ttl))
   (cache-invalidate [this key]           (.invalidate this key)))
 
-(defonce ^:private store (atom nil))
-
-(defn register-cache! [impl]
-  (reset! store impl))
-
-(defn lookup [key]
-  (when-let [s @store]
+(defn lookup
+  "Return the cached value for `key` from `store`, or nil if absent, expired,
+   or if `store` is nil. Never throws — exceptions are logged and swallowed."
+  [store key]
+  (when store
     (try
-      (cache-get s key)
+      (cache-get store key)
       (catch Exception e
         (log/warnf "Cache get error for key=%s: %s" key (.getMessage e))
         nil))))
 
-(defn save [key value ttl-ms]
-  (when-let [s @store]
+(defn save
+  "Cache `value` under `key` in `store` with `ttl-ms` time-to-live. No-op
+   when `store` is nil. Never throws."
+  [store key value ttl-ms]
+  (when store
     (try
-      (cache-put s key value ttl-ms)
+      (cache-put store key value ttl-ms)
       (catch Exception e
         (log/warnf "Cache put error for key=%s: %s" key (.getMessage e))))))
 
-(defn invalidate [key]
-  (when-let [s @store]
+(defn invalidate
+  "Remove `key` from `store`. No-op when `store` is nil. Never throws."
+  [store key]
+  (when store
     (try
-      (cache-invalidate s key)
+      (cache-invalidate store key)
       (catch Exception e
         (log/warnf "Cache invalidate error for key=%s: %s" key (.getMessage e))))))

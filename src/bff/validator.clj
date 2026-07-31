@@ -1,5 +1,6 @@
 (ns bff.validator
-  (:require [bff.interop :as interop]))
+  (:require [bff.interop :as interop]
+            [bff.registry :as registry]))
 
 (defprotocol BffValidator
   (validate [this args ctx]))
@@ -20,20 +21,6 @@
             seq
             vec)))
 
-(defonce ^:private validator-registry (atom {}))
-
-(defn register-validator!
-  "Register a BffValidator (or plain fn) under key k."
-  [k validator]
-  (swap! validator-registry assoc k validator))
-
-(defn- resolve-validator [validator-cfg]
-  (if-let [k (:key validator-cfg)]
-    (or (get @validator-registry k)
-        (throw (ex-info (str "No validator registered for key: " k)
-                        {:key k :registered (keys @validator-registry)})))
-    (requiring-resolve (symbol (:ns validator-cfg) (:fn validator-cfg)))))
-
 (defn- validate-arg [arg-name value rules]
   (when (some? value)
     (let [failed? (or (and (:pattern rules)
@@ -52,11 +39,17 @@
                  (validate-arg arg-name (get args arg-name) rules))))))
 
 (defn run-validation
-  "Run all declared validators for an endpoint against the provided args.
+  "Run built-in and custom validation for an endpoint.
+
    Returns a seq of {:message ...} error maps, or nil if everything passes.
-   Runs built-in arg rules first, then the custom validator if declared."
-  [endpoint args ctx]
+   Built-in arg rules run first, then the custom :validator declared on the
+   endpoint (looked up in `validators`).
+
+   `validators` is the caller-owned registry map (\"key\" → impl); pass an
+   empty map when no custom validators are configured."
+  [endpoint args ctx validators]
   (let [builtin (run-builtin-validation endpoint args)
         custom  (when-let [vcfg (:validator endpoint)]
-                  (validate (resolve-validator vcfg) args ctx))]
+                  (validate (registry/resolve-impl vcfg validators "validator")
+                            args ctx))]
     (not-empty (concat builtin custom))))

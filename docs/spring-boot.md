@@ -1,8 +1,9 @@
 # Spring Boot 3 integration
 
 BFF ships with `io.github.rthadani.bff.Bff` — a static Java facade that
-handles Clojure loading, extension registration, and Jakarta servlet wiring
-for you. There is no Ring bridge to hand-roll.
+handles Clojure loading and Jakarta servlet wiring for you. Extensions are
+supplied through an immutable `BffConfig` at startup; there is no global
+registry and no runtime registration.
 
 ## Dependencies (`pom.xml`)
 
@@ -10,7 +11,7 @@ for you. There is no Ring bridge to hand-roll.
 <dependency>
     <groupId>io.github.rthadani</groupId>
     <artifactId>bff</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
 </dependency>
 <dependency>
     <groupId>org.clojure</groupId>
@@ -25,13 +26,14 @@ spec file in `src/main/resources/`.
 
 ## Mounting the servlet
 
-The simplest route is `Bff.createServlet(specPath)` behind a
-`ServletRegistrationBean`. All extension registrations must happen before
-the servlet is created (the spec is compiled at that point), so put them in
-the same `@Bean` method or use `@DependsOn` to enforce ordering.
+Build a `BffConfig` from your Spring beans, then hand it to
+`Bff.createServlet` behind a `ServletRegistrationBean`. All extensions are
+captured into the handler at this point — there is no register-then-create
+dance.
 
 ```java
 import io.github.rthadani.bff.Bff;
+import io.github.rthadani.bff.BffConfig;
 import jakarta.servlet.http.HttpServlet;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -40,17 +42,22 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class BffConfiguration {
 
-    private final BffExtensions extensions;
-
-    public BffConfiguration(BffExtensions extensions) {
-        this.extensions = extensions;
+    @Bean
+    public BffConfig bffConfig(BffExtensions ext) {
+        return BffConfig.builder()
+            .enricher   (ext.customerEnricher())
+            .validator  ("check-order",       ext.orderValidator())
+            .transformer("attach-warnings",   ext.warningsTransformer())
+            .resolver   ("user-profile",      ext.userProfileResolver())
+            .retryHook  ("cmap-token-refresh", ext.tokenRefreshHook())
+            .cache(ext.redisCacheStore())
+            .build();
     }
 
     @Bean
-    public ServletRegistrationBean<HttpServlet> bffServlet() {
-        extensions.registerAll();
+    public ServletRegistrationBean<HttpServlet> bffServlet(BffConfig config) {
         ServletRegistrationBean<HttpServlet> reg =
-            new ServletRegistrationBean<>(Bff.createServlet("bff-spec.yaml"), "/graphql");
+            new ServletRegistrationBean<>(Bff.createServlet("bff-spec.yaml", config), "/graphql");
         reg.setName("bff");
         reg.setLoadOnStartup(1);
         return reg;
@@ -59,9 +66,9 @@ public class BffConfiguration {
 ```
 
 For a controller-style mount instead of the servlet, use
-`Bff.createHandler(specPath)` and call it yourself.
+`Bff.createHandler(specPath, config)` and call the returned `IFn` yourself.
 
-## Registering extensions
+## Extension implementations
 
 Extensions can implement the raw Java interfaces under
 `io.github.rthadani.bff.*` or extend the convenience base classes — pick per
@@ -71,8 +78,8 @@ extension. See [extensions.md](extensions.md) for the full API.
 import bff.executor.BaseTransformer;
 import bff.executor.BaseResolver;
 import bff.validator.BaseValidator;
-import io.github.rthadani.bff.Bff;
 import io.github.rthadani.bff.BffContextEnricher;
+import io.github.rthadani.bff.BffRetryHook;
 import io.github.rthadani.bff.CacheStore;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -81,6 +88,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -88,14 +96,14 @@ import java.util.Map;
 public class BffExtensions {
 
     @Autowired StringRedisTemplate redis;
+    @Autowired CmapTokenService    tokens;
 
-    public void registerAll() {
-        Bff.registerContextEnricher(new CustomerEnricher(redis));
-        Bff.registerTransformer("attach-warnings", new WarningsTransformer());
-        Bff.registerValidator  ("check-order",     new OrderValidator());
-        Bff.registerResolver   ("user-profile",    new UserProfileResolver());
-        Bff.registerCache(new RedisCacheStore(redis));
-    }
+    public BffContextEnricher customerEnricher()   { return new CustomerEnricher(redis); }
+    public BaseValidator      orderValidator()     { return new OrderValidator(); }
+    public BaseTransformer    warningsTransformer(){ return new WarningsTransformer(); }
+    public BaseResolver       userProfileResolver(){ return new UserProfileResolver(); }
+    public BffRetryHook       tokenRefreshHook()   { return new TokenRefreshHook(tokens); }
+    public CacheStore         redisCacheStore()    { return new RedisCacheStore(redis); }
 
     static class WarningsTransformer extends BaseTransformer {
         @Override
@@ -142,6 +150,20 @@ public class BffExtensions {
         }
     }
 
+    static class TokenRefreshHook implements BffRetryHook {
+        private final CmapTokenService tokens;
+        TokenRefreshHook(CmapTokenService tokens) { this.tokens = tokens; }
+
+        @Override
+        @SuppressWarnings("unchecked")
+        public Map<String, Object> beforeRetry(Map<String, Object> failureContext) {
+            Map<String, Object> requestCtx = (Map<String, Object>) failureContext.get("request-ctx");
+            Map<String, Object> next = new HashMap<>(requestCtx);
+            next.put("authorization", "Bearer " + tokens.refresh());
+            return next;
+        }
+    }
+
     static class RedisCacheStore implements CacheStore {
         private final StringRedisTemplate redis;
         RedisCacheStore(StringRedisTemplate redis) { this.redis = redis; }
@@ -181,5 +203,14 @@ The `authorization` header (and `x-request-id`, `x-correlation-id`) are
 forwarded to every downstream HTTP step automatically. See
 `forward_headers` in the [spec reference](spec.md) if you need to widen or
 narrow that list.
+
+## Migrating from the register-*! API
+
+Before 0.2.0 extensions were registered globally via `Bff.registerValidator`,
+`Bff.registerCache`, etc. Those methods are gone. Replace each call with the
+corresponding builder method on `BffConfig.builder()` and pass the built
+config to `Bff.createHandler(spec, config)` or
+`Bff.createServlet(spec, config)`. The `bff.*/register-*!` Clojure functions
+and the process-wide atoms are also gone.
 
 See [extensions.md](extensions.md) for full documentation on each extension type.

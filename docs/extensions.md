@@ -1,35 +1,70 @@
 # Extensions
 
-Six extension points let you plug custom logic into the request pipeline.
-Each follows the same pattern: a Clojure protocol with an `IFn` extension
-(so plain functions work without wrapping), a Java interface under
+Six extension points let you plug custom logic into the request pipeline. All
+extensions are supplied to `bff.core/create-handler` (or the Java
+`Bff.createHandler` / `Bff.createServlet` overloads) via a single immutable
+config — there is no global registry and no runtime registration.
+
+Each extension follows the same pattern: a Clojure protocol with an `IFn`
+extension (so plain functions work without wrapping), a Java interface under
 `io.github.rthadani.bff.*` (so Java classes are first-class), and — for the
 three request-scoped points — a convenience base class that hides the
 boilerplate.
 
-| Extension          | When it runs                             | Declared in spec as                  | Java interface                                    |
-|--------------------|------------------------------------------|--------------------------------------|---------------------------------------------------|
-| context enricher   | First, once per request                  | (registered once)                    | `io.github.rthadani.bff.BffContextEnricher`       |
-| `validator`        | After enrichment, before the chain       | `validator:`                         | `io.github.rthadani.bff.BffValidator`             |
-| `transformer`      | After output mapping                     | `transformer:`                       | `io.github.rthadani.bff.BffTransformer`           |
-| `resolver`         | Instead of the backend chain             | `resolver:`                          | `io.github.rthadani.bff.BffResolver`              |
-| cache backend      | Around every cacheable step              | (registered once)                    | `io.github.rthadani.bff.CacheStore`               |
-| retry hook         | Between step attempts (when retry fires) | inside a step's `retry.before_retry` | *(Clojure only for now)*                          |
+| Extension          | When it runs                             | Referenced in spec as                | Config key       | Java interface                                    |
+|--------------------|------------------------------------------|--------------------------------------|------------------|---------------------------------------------------|
+| context enricher   | First, once per request                  | (implicit, ordered chain)            | `:enrichers`     | `io.github.rthadani.bff.BffContextEnricher`       |
+| `validator`        | After enrichment, before the chain       | `validator:`                         | `:validators`    | `io.github.rthadani.bff.BffValidator`             |
+| `transformer`      | After output mapping                     | `transformer:`                       | `:transformers`  | `io.github.rthadani.bff.BffTransformer`           |
+| `resolver`         | Instead of the backend chain             | `resolver:`                          | `:resolvers`     | `io.github.rthadani.bff.BffResolver`              |
+| cache backend      | Around every cacheable step              | (single instance)                    | `:cache`         | `io.github.rthadani.bff.CacheStore`               |
+| retry hook         | Between step attempts (when retry fires) | inside a step's `retry.before_retry` | `:retry-hooks`   | `io.github.rthadani.bff.BffRetryHook`             |
 
-Java authors have two options at every extension point that ships with a Java
-interface:
+Java authors have two options at every extension point that ships with a base
+class:
 
 1. **Implement the interface directly.** Args and ctx arrive as
-   `Map<String, Object>` with String keys; conversion to/from Clojure keywords
-   is handled at the interop boundary. This is the minimum-ceremony route and
-   composes cleanly with Spring's `@Component`.
+   `Map<String, Object>` with String keys. Minimum ceremony; composes cleanly
+   with Spring's `@Component`.
 2. **Extend the convenience base class.** Gets you typed helpers
    (`ResolverResult`, `StepResult`) at the cost of one extra layer of
-   inheritance. Recommended when the interface's raw `Map` surface would be
-   awkward.
+   inheritance.
 
 Plain Clojure functions continue to work everywhere — the Java interfaces are
 purely additive.
+
+## The extensions map
+
+Both `bff.core/create-handler` and Java's `Bff.createHandler` accept a single
+extensions config. In Clojure it is a plain map:
+
+```clojure
+(bff/create-handler
+  "bff-spec.yaml"
+  {:enrichers    [customer-enricher tenant-enricher]        ; ordered seq
+   :validators   {"check-order"       order-validator}      ; keyed
+   :transformers {"attach-warnings"   warnings-transformer}
+   :resolvers    {"user-profile"      user-profile-resolver}
+   :retry-hooks  {"cmap-token-refresh" token-refresh-hook}
+   :cache         redis-cache-store})
+```
+
+In Java, use the `BffConfig.Builder`:
+
+```java
+BffConfig config = BffConfig.builder()
+    .enricher(customerEnricher)
+    .enricher(tenantEnricher)
+    .validator("check-order",       orderValidator)
+    .transformer("attach-warnings", warningsTransformer)
+    .resolver("user-profile",       userProfileResolver)
+    .retryHook("cmap-token-refresh", tokenRefreshHook)
+    .cache(redisCacheStore)
+    .build();
+```
+
+All keys are optional. The handler closes over the config once at startup —
+there is no way to add extensions after `create-handler` returns.
 
 ---
 
@@ -41,9 +76,9 @@ step or validator can read without repeating the lookup — the canonical case
 is fetching a customer / equipment identifier from Redis using the JWT
 subject.
 
-Multiple enrichers can be registered; they run in registration order and each
-sees the ctx accumulated by earlier enrichers. An enricher's return value is
-merged into ctx (return `nil` to leave ctx alone).
+Enrichers run in the order they appear in `:enrichers`; each sees the ctx
+accumulated by earlier enrichers. An enricher's return value is merged into
+ctx (return `nil` to leave ctx unchanged).
 
 ### Protocol
 
@@ -52,16 +87,20 @@ merged into ctx (return `nil` to leave ctx alone).
   (enrich [this ctx]))
 ```
 
-### Clojure — registration
+### Clojure
 
 ```clojure
-(require '[bff.enricher :as enricher])
+(defn customer-enricher
+  [{:keys [authorization]}]
+  (let [subject     (jwt/subject authorization)
+        customer-id (redis/hget (str "user:" subject) "customerId")]
+    {:customerId customer-id}))
+```
 
-(enricher/register-enricher!
-  (fn [{:keys [authorization]}]
-    (let [subject     (jwt/subject authorization)
-          customer-id (redis/hget (str "user:" subject) "customerId")]
-      {:customerId customer-id})))
+Register by adding it to `:enrichers` in your config:
+
+```clojure
+(bff/create-handler "spec.yaml" {:enrichers [customer-enricher]})
 ```
 
 ### Java — interface
@@ -70,7 +109,6 @@ merged into ctx (return `nil` to leave ctx alone).
 import io.github.rthadani.bff.BffContextEnricher;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.util.HashMap;
 import java.util.Map;
 
 public class CustomerEnricher implements BffContextEnricher {
@@ -81,14 +119,13 @@ public class CustomerEnricher implements BffContextEnricher {
     @Override
     public Map<String, Object> enrich(Map<String, Object> ctx) {
         String subject = JwtUtil.subject((String) ctx.get("authorization"));
-        String cust    = redis.opsForHash().get("user:" + subject, "customerId").toString();
-        return Map.of("customerId", cust);
+        Object cust    = redis.opsForHash().get("user:" + subject, "customerId");
+        return cust == null ? null : Map.of("customerId", cust.toString());
     }
 }
 ```
 
-Register the instance once at application startup — see
-[Spring Boot integration](spring-boot.md).
+Register on the builder: `.enricher(new CustomerEnricher(redis))`.
 
 Downstream, an endpoint or step can read the enriched value via a `ctx`
 source mapping:
@@ -104,9 +141,9 @@ input_mapping:
 
 ## Validator
 
-Runs before any backend call. Return errors to short-circuit; the chain is never
-touched. Both built-in arg rules and a custom validator can be declared on the
-same endpoint — built-in rules run first, then the custom validator.
+Runs before any backend call. Return errors to short-circuit; the chain is
+never touched. Both built-in arg rules and a custom validator can be declared
+on the same endpoint — built-in rules run first, then the custom validator.
 
 ### Protocol
 
@@ -123,7 +160,7 @@ Return `nil` or `[]` to pass. Return `[{:message "..."}]` to fail.
 (ns my.project.validators)
 
 (defn check-order
-  [args ctx]
+  [args _ctx]
   (when (and (= "GBP" (:currency args))
              (> (:amount args) 10000))
     [{:message "GBP orders above 10000 require manual approval"}]))
@@ -135,15 +172,13 @@ validator:
   fn: check-order
 ```
 
-### Clojure — registered by key
+### Clojure — by key
 
 ```clojure
-(require '[bff.validator :as validator])
+(defn check-order [args _ctx] ...)
 
-(validator/register-validator! "check-order"
-  (fn [args _ctx]
-    (when (> (:amount args) 10000)
-      [{:message "amount exceeds limit"}])))
+(bff/create-handler "spec.yaml"
+  {:validators {"check-order" check-order}})
 ```
 
 ```yaml
@@ -195,8 +230,7 @@ public class OrderValidator extends BaseValidator {
 }
 ```
 
-Register the instance before `bff.core/create-handler` runs — see the
-[Spring Boot integration](spring-boot.md) for the recommended pattern.
+Register on the builder: `.validator("check-order", new OrderValidator())`.
 
 ---
 
@@ -218,7 +252,7 @@ step result map, and the already-mapped output. Returns the final output map.
 (ns my.project.transformers.orders)
 
 (defn attach-warnings
-  [args chain-ctx output]
+  [_args chain-ctx output]
   (assoc output :warnings
          (cond-> []
            (= :error (get-in chain-ctx [:notify_user :status]))
@@ -231,14 +265,11 @@ transformer:
   fn: attach-warnings
 ```
 
-### Clojure — registered by key
+### Clojure — by key
 
 ```clojure
-(require '[bff.executor :as executor])
-
-(executor/register-transformer! "attach-warnings"
-  (fn [args chain-ctx output]
-    (assoc output :warnings [])))
+(bff/create-handler "spec.yaml"
+  {:transformers {"attach-warnings" attach-warnings}})
 ```
 
 ```yaml
@@ -300,6 +331,8 @@ public class AttachWarningsTransformer extends BaseTransformer {
 }
 ```
 
+Register on the builder: `.transformer("attach-warnings", new AttachWarningsTransformer())`.
+
 ---
 
 ## Resolver
@@ -322,7 +355,7 @@ Return `{:data {...} :errors [...]}`.
 ```clojure
 (ns my.project.resolvers)
 
-(defn user-profile [args ctx]
+(defn user-profile [args _ctx]
   (let [user (db/find-user (:userId args))]
     {:data   {:fullName (:name user) :email (:email user)}
      :errors []}))
@@ -334,14 +367,11 @@ resolver:
   fn: user-profile
 ```
 
-### Clojure — registered by key
+### Clojure — by key
 
 ```clojure
-(require '[bff.executor :as executor])
-
-(executor/register-resolver! "user-profile"
-  (fn [args ctx]
-    {:data {:fullName "Alice"} :errors []}))
+(bff/create-handler "spec.yaml"
+  {:resolvers {"user-profile" user-profile}})
 ```
 
 ```yaml
@@ -396,7 +426,7 @@ public class UserProfileResolver extends BaseResolver {
         String userId = (String) args.get("userId");
         User user = repo.findById(userId);
         if (user == null) {
-            return ResolverResult.error("User not found: " + userId);
+            return ResolverResult.error("User not found: " + userId, "USER_NOT_FOUND");
         }
         return ResolverResult.ok(Map.of(
             "fullName", user.getName(),
@@ -406,19 +436,11 @@ public class UserProfileResolver extends BaseResolver {
 }
 ```
 
-`ResolverResult.withError` lets you return partial data alongside errors:
+`ResolverResult.withError` lets you return partial data alongside errors, and
+either factory takes an optional machine-readable code that surfaces under
+`extensions.code`:
 
 ```java
-return ResolverResult.ok(Map.of("fullName", user.getName()))
-                     .withError("email service unavailable");
-```
-
-Attach a machine-readable error code that surfaces under `extensions.code` on
-the GraphQL response — clients can switch on it without parsing the message:
-
-```java
-return ResolverResult.error("MAC already in use", "MAC_ALREADY_MAPPED");
-
 return ResolverResult.ok(Map.of("fullName", user.getName()))
                      .withError("email service unavailable", "EMAIL_UNAVAILABLE");
 ```
@@ -427,14 +449,16 @@ Clojure resolvers surface the same shape by returning `{:message "..." :code "..
 in `:errors` — the engine lifts a top-level `:code` into `:extensions.code`
 automatically.
 
+Register on the builder: `.resolver("user-profile", new UserProfileResolver(repo))`.
+
 ---
 
 ## Cache backend
 
-Registered once at startup. Every backend step that declares
-`cache: {key: "..."}` in the spec routes reads and writes through the configured
-implementation. Any exception thrown by the store is logged and swallowed —
-cache failures never propagate to the GraphQL response.
+A single instance registered on the handler. Every backend step that declares
+`cache: {key: "..."}` in the spec routes reads and writes through the
+configured implementation. Any exception thrown by the store is logged and
+swallowed — cache failures never propagate to the GraphQL response.
 
 ### Protocol
 
@@ -445,16 +469,16 @@ cache failures never propagate to the GraphQL response.
   (cache-invalidate [this key]))
 ```
 
-### Clojure — registration
+### Clojure
 
 ```clojure
-(require '[bff.cache :as cache])
+(def store
+  (reify bff.cache/CacheStore
+    (cache-get        [_ k]         (get @cache-atom k))
+    (cache-put        [_ k v _ttl]  (swap! cache-atom assoc k v))
+    (cache-invalidate [_ k]         (swap! cache-atom dissoc k))))
 
-(cache/register-cache!
-  (reify cache/CacheStore
-    (cache-get        [_ k]         (get @store k))
-    (cache-put        [_ k v _ttl]  (swap! store assoc k v))
-    (cache-invalidate [_ k]         (swap! store dissoc k))))
+(bff/create-handler "spec.yaml" {:cache store})
 ```
 
 ### Java — interface
@@ -485,8 +509,7 @@ public class RedisCacheStore implements CacheStore {
 }
 ```
 
-Register the instance once at application startup — see
-[Spring Boot integration](spring-boot.md) for the recommended pattern.
+Register on the builder: `.cache(new RedisCacheStore(redis))`.
 
 ---
 
@@ -552,15 +575,11 @@ retry:
     fn: cmap-token-refresh
 ```
 
-### Clojure — registered by key
+### Clojure — by key
 
 ```clojure
-(require '[bff.retry :as retry])
-
-(retry/register-retry-hook! "cmap-token-refresh"
-  (fn [{:keys [request-ctx]}]
-    (assoc request-ctx :authorization
-           (str "Bearer " (cmap-client/refresh-service-token!)))))
+(bff/create-handler "spec.yaml"
+  {:retry-hooks {"cmap-token-refresh" cmap-token-refresh}})
 ```
 
 ```yaml
@@ -568,3 +587,28 @@ retry:
   before_retry:
     key: cmap-token-refresh
 ```
+
+### Java — interface
+
+```java
+import io.github.rthadani.bff.BffRetryHook;
+import java.util.HashMap;
+import java.util.Map;
+
+public class TokenRefreshHook implements BffRetryHook {
+    private final CmapTokenService tokens;
+
+    public TokenRefreshHook(CmapTokenService tokens) { this.tokens = tokens; }
+
+    @Override
+    public Map<String, Object> beforeRetry(Map<String, Object> failureContext) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> requestCtx = (Map<String, Object>) failureContext.get("request-ctx");
+        Map<String, Object> next = new HashMap<>(requestCtx);
+        next.put("authorization", "Bearer " + tokens.refresh());
+        return next;
+    }
+}
+```
+
+Register on the builder: `.retryHook("cmap-token-refresh", new TokenRefreshHook(tokens))`.

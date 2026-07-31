@@ -34,7 +34,7 @@ bff-spec.yaml
 Add to `deps.edn`:
 
 ```clojure
-io.github.rthadani/bff {:mvn/version "0.1.0"}
+io.github.rthadani/bff {:mvn/version "0.2.0"}
 ```
 
 Create a spec file and start the handler:
@@ -42,7 +42,17 @@ Create a spec file and start the handler:
 ```clojure
 (require '[bff.core :as bff])
 
+;; Simplest — no extensions
 (def handler (bff/create-handler "bff-spec.yaml"))
+
+;; With extensions
+(def handler
+  (bff/create-handler
+    "bff-spec.yaml"
+    {:validators   {"check-order" my-validator-fn}
+     :transformers {"attach-warnings" my-transformer-fn}
+     :resolvers    {"user-profile" my-resolver-fn}
+     :cache        my-cache-store}))
 ;; handler is a standard Ring handler — mount it however you like
 ```
 

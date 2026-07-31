@@ -31,6 +31,12 @@ input_types:           # optional — shared input object types for mutation arg
       field1: String!
       field2: Int
 
+output_types:          # optional — shared output object types
+  - name: OnboardResult
+    fields:
+      customerId:  String!
+      equipmentId: String!
+
 endpoints:             # list of query and mutation definitions
   - ...
 ```
@@ -39,6 +45,40 @@ Every name in the `scalars:` block must have a matching implementation
 supplied to `bff.core/create-handler` under the `:scalars` config key (or via
 `BffConfig.Builder#scalar` in Java). See
 [extensions.md — Custom scalar](extensions.md#custom-scalar) for the interface.
+
+### Sharing types across endpoints
+
+Any type declared under top-level `input_types:` or `output_types:` can be
+referenced from an endpoint by bare name:
+
+```yaml
+output_types:
+  - name: OnboardResult
+    fields:
+      customerId:  String!
+      equipmentId: String!
+
+endpoints:
+  - name: residentialOnboard
+    type: mutation
+    output_type: OnboardResult      # reference by name
+    ...
+  - name: smbOnboard
+    type: mutation
+    output_type: OnboardResult      # same type reused
+    ...
+```
+
+Inline definitions (`output_type: {name: X, fields: ...}`) still work and can
+coexist with top-level declarations.
+
+**Duplicate definitions are merged field by field.** If the same type name
+appears in multiple places (top-level plus inline, or two inline definitions
+on different endpoints), the field sets are unioned. Fields that appear in
+both definitions must declare the same type; a mismatch throws at
+`create-handler` time with the type name, field name, and both conflicting
+declarations in `ex-data`. This lets you split large types across endpoint
+definitions while catching accidental collisions at boot.
 
 ## Endpoint
 

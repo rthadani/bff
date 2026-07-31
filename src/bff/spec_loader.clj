@@ -64,7 +64,9 @@
 (defn- merge-specs
   [specs]
   {:endpoints       (vec (mapcat :endpoints specs))
-   :input_types     (vec (mapcat #(get % :input_types []) specs))
+   :input_types     (vec (mapcat #(get % :input_types  []) specs))
+   :output_types    (vec (mapcat #(get % :output_types []) specs))
+   :scalars         (vec (mapcat #(get % :scalars      []) specs))
    :forward_headers (vec (distinct (mapcat #(get % :forward_headers []) specs)))})
 
 (defn- compile-mapping-entry [mapping]

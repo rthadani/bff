@@ -368,7 +368,11 @@
     (check-type-merges spec)
     (check-jq-compiles spec)))
 
-(defn- vectorize [x]
+(defn- vectorize
+  "clj-yaml returns YAML sequences as lists, which don't support get-in with
+   integer indices. Coerce every list to a vector so malli's error paths
+   round-trip through get-in."
+  [x]
   (walk/postwalk (fn [v] (if (seq? v) (vec v) v)) x))
 
 (defn lint-spec

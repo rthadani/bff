@@ -1,5 +1,6 @@
 (ns bff.linter
-  (:require [malli.core :as m]))
+  (:require [malli.core :as m]
+            [malli.error :as me]))
 
 (def ^:private problem-schema
   [:map
@@ -122,11 +123,28 @@
    [:output_types    {:optional true}
     [:vector [:schema {:registry object-type-registry} [:ref ::object-type]]]]])
 
+(defn- in->path-string
+  [in]
+  (reduce (fn [acc seg]
+            (cond
+              (int? seg) (str acc "[" seg "]")
+              :else      (if (empty? acc)
+                           (name seg)
+                           (str acc "." (name seg)))))
+          ""
+          in))
+
+(defn- explain-error->problem
+  [spec {:keys [in type] :as err}]
+  (let [extra?    (= type :malli.core/extra-key)
+        node-path (if (seq in) (butlast in) in)]
+    {:severity (if extra? :warning :error)
+     :path     (in->path-string in)
+     :message  (or (me/error-message err) "invalid")
+     :node     (if (seq node-path) (get-in spec node-path) spec)}))
+
 (defn lint-spec
   [spec]
-  (if (m/validate spec-schema spec)
-    []
-    [{:severity :error
-      :path     ""
-      :message  "spec does not match the structural schema"
-      :node     spec}]))
+  (if-let [errors (:errors (m/explain spec-schema spec))]
+    (mapv #(explain-error->problem spec %) errors)
+    []))

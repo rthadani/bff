@@ -10,10 +10,6 @@
   (is (not (linter/problem? {:severity :error :path "x" :message "y"})))
   (is (not (linter/problem? {:severity :bogus :path "x" :message "y" :node {}}))))
 
-;; --------------------------------------------------------------------------
-;; Structural — schema validation
-;; --------------------------------------------------------------------------
-
 (def ^:private minimal-spec
   {:endpoints
    [{:name "ping"
@@ -52,3 +48,34 @@
                         assoc :backend_chain
                         [{:id "s" :url "http://api" :method "TRACE"}])]
     (is (= 1 (count (linter/lint-spec spec))))))
+
+(deftest test-typo-becomes-warning-with-key-path
+  (let [step {:id "s" :url "http://api" :method "GET" :retrys {:max 1}}
+        spec (update-in minimal-spec [:endpoints 0]
+                        assoc :backend_chain [step])
+        [p]  (linter/lint-spec spec)]
+    (is (= :warning (:severity p)))
+    (is (= "endpoints[0].backend_chain[0].retrys" (:path p)))
+    (is (= step (:node p)))))
+
+(deftest test-invalid-method-becomes-error
+  (let [step {:id "s" :url "http://api" :method "TRACE"}
+        spec (update-in minimal-spec [:endpoints 0]
+                        assoc :backend_chain [step])
+        [p]  (linter/lint-spec spec)]
+    (is (= :error (:severity p)))
+    (is (= "endpoints[0].backend_chain[0].method" (:path p)))
+    (is (= step (:node p)))))
+
+(deftest test-missing-endpoints-points-at-spec
+  (let [[p] (linter/lint-spec {})]
+    (is (= :error (:severity p)))
+    (is (= {} (:node p)))))
+
+(deftest test-multiple-typos-produce-multiple-problems
+  (let [spec (update-in minimal-spec [:endpoints 0]
+                        assoc :backend_chain
+                        [{:id "s" :url "http://api" :method "GET" :retrys 1 :cach "x"}])
+        problems (linter/lint-spec spec)]
+    (is (= 2 (count problems)))
+    (is (every? #(= :warning (:severity %)) problems))))

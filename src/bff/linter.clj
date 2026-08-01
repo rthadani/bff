@@ -1,8 +1,13 @@
 (ns bff.linter
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.pprint :as pp]
+            [clojure.string :as str]
+            [clojure.walk :as walk]
             [bff.jq-engine :as jq]
+            [clj-yaml.core :as yaml]
             [malli.core :as m]
-            [malli.error :as me]))
+            [malli.error :as me])
+  (:gen-class))
 
 (def ^:private problem-schema
   [:map
@@ -53,7 +58,7 @@
 (def ^:private retry-schema
   [:map {:closed true}
    [:max :int]
-   [:on_code [:vector [:or :string :keyword]]]
+   [:on_code [:sequential [:or :string :keyword]]]
    [:before_retry {:optional true} extension-ref]])
 
 (def ^:private compensation-schema
@@ -69,7 +74,7 @@
    [:id     :string]
    [:url    :string]
    [:method http-method]
-   [:deps          {:optional true} [:vector :string]]
+   [:deps          {:optional true} [:sequential :string]]
    [:critical      {:optional true} :boolean]
    [:condition     {:optional true} mapping-entry]
    [:input_mapping {:optional true} [:map-of :any mapping-entry]]
@@ -100,7 +105,7 @@
    [:description        {:optional true} :string]
    [:deprecation_reason {:optional true} :string]
    [:args               {:optional true} [:map-of :any arg-schema]]
-   [:backend_chain      {:optional true} [:vector backend-step-schema]]
+   [:backend_chain      {:optional true} [:sequential backend-step-schema]]
    [:output_mapping     {:optional true} :any]
    [:validator          {:optional true} extension-ref]
    [:transformer        {:optional true} extension-ref]
@@ -118,12 +123,12 @@
 
 (def ^:private spec-schema
   [:map {:closed true}
-   [:endpoints [:vector endpoint-schema]]
-   [:forward_headers {:optional true} [:vector :string]]
-   [:scalars         {:optional true} [:vector scalar-schema]]
-   [:input_types     {:optional true} [:vector input-type-schema]]
+   [:endpoints [:sequential endpoint-schema]]
+   [:forward_headers {:optional true} [:sequential :string]]
+   [:scalars         {:optional true} [:sequential scalar-schema]]
+   [:input_types     {:optional true} [:sequential input-type-schema]]
    [:output_types    {:optional true}
-    [:vector [:schema {:registry object-type-registry} [:ref ::object-type]]]]])
+    [:sequential [:schema {:registry object-type-registry} [:ref ::object-type]]]]])
 
 (defn- in->path-string
   [in]
@@ -143,7 +148,9 @@
     {:severity (if extra? :warning :error)
      :path     (in->path-string in)
      :message  (or (me/error-message err) "invalid")
-     :node     (if (seq node-path) (get-in spec node-path) spec)}))
+     :node     (or (some->> node-path seq (get-in spec))
+                   (some->> in seq (get-in spec))
+                   spec)}))
 
 (def ^:private built-in-scalars
   #{"String" "Int" "Float" "Boolean" "ID"})
@@ -361,8 +368,44 @@
     (check-type-merges spec)
     (check-jq-compiles spec)))
 
+(defn- vectorize [x]
+  (walk/postwalk (fn [v] (if (seq? v) (vec v) v)) x))
+
 (defn lint-spec
   [spec]
-  (if-let [problems (seq (structural-problems spec))]
-    (vec problems)
-    (vec (cross-ref-problems spec))))
+  (let [spec (vectorize spec)]
+    (if-let [problems (seq (structural-problems spec))]
+      (vec problems)
+      (vec (cross-ref-problems spec)))))
+
+(defn- indent [s]
+  (->> (str/split-lines s)
+       (map #(str "  " %))
+       (str/join "\n")))
+
+(defn- format-problem [{:keys [severity path message node]}]
+  (str (str/upper-case (name severity)) " " path "\n"
+       "  " message "\n"
+       (indent (with-out-str (pp/pprint node)))))
+
+(defn- summary [problems]
+  (let [{errs :error warns :warning} (group-by :severity problems)]
+    (format "%d error(s), %d warning(s)" (count errs) (count warns))))
+
+(defn lint-file [path]
+  (-> path slurp yaml/parse-string lint-spec))
+
+(defn -main [& args]
+  (let [path (first args)]
+    (when-not path
+      (println "usage: clj -M:lint <spec.yaml>")
+      (System/exit 2))
+    (when-not (.exists (io/file path))
+      (println "not found:" path)
+      (System/exit 2))
+    (let [problems (lint-file path)]
+      (doseq [p problems]
+        (println (format-problem p))
+        (println))
+      (println (summary problems))
+      (System/exit (if (some #(= :error (:severity %)) problems) 1 0)))))

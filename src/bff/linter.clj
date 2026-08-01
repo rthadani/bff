@@ -278,6 +278,54 @@
        :message  (str "unknown type '" base "'")
        :node     node})))
 
+(defn- all-nested-object-defs [prefix ot]
+  (if (map? ot)
+    (cons [prefix ot]
+          (mapcat (fn [[k v]]
+                    (all-nested-object-defs (str prefix ".fields." (name k)) v))
+                  (:fields ot)))
+    []))
+
+(defn- all-type-defs [spec]
+  (concat
+    (for [[i it] (map-indexed vector (:input_types spec))]
+      [(str "input_types[" i "]") it])
+    (mapcat (fn [[i ot]]
+              (all-nested-object-defs (str "output_types[" i "]") ot))
+            (map-indexed vector (:output_types spec)))
+    (mapcat (fn [[ei ep]]
+              (all-nested-object-defs (str "endpoints[" ei "].output_type")
+                                      (:output_type ep)))
+            (map-indexed vector (:endpoints spec)))))
+
+(defn- field-type [v] (if (map? v) (:name v) v))
+
+(defn- merge-conflict-problem [path type-name field-name existing incoming node]
+  {:severity :error
+   :path     (str path ".fields." (name field-name))
+   :message  (str "conflicting type for field '" (name field-name)
+                  "' in '" type-name "': existing '" existing
+                  "', new '" incoming "'")
+   :node     node})
+
+(defn- all-field-decls [spec]
+  (for [[path def] (all-type-defs spec)
+        [fk fv]    (:fields def)]
+    {:type-name (:name def)
+     :field     fk
+     :type      (field-type fv)
+     :path      path
+     :def       def}))
+
+(defn- check-type-merges [spec]
+  (mapcat
+    (fn [[[type-name field-name] decls]]
+      (let [expected (:type (first decls))]
+        (for [d (rest decls) :when (not= (:type d) expected)]
+          (merge-conflict-problem (:path d) type-name field-name
+                                  expected (:type d) (:def d)))))
+    (group-by (juxt :type-name :field) (all-field-decls spec))))
+
 (defn- structural-problems [spec]
   (when-let [errors (:errors (m/explain spec-schema spec))]
     (mapv #(explain-error->problem spec %) errors)))
@@ -288,7 +336,8 @@
     (check-deps spec)
     (check-step-refs spec)
     (check-arg-refs spec)
-    (check-type-refs spec)))
+    (check-type-refs spec)
+    (check-type-merges spec)))
 
 (defn lint-spec
   [spec]

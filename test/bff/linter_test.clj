@@ -133,3 +133,38 @@
                  (assoc :scalars [{:name "DateTime"}])
                  (assoc-in [:endpoints 0 :output_type :fields :when] "DateTime!"))]
     (is (= [] (linter/lint-spec spec)))))
+
+(deftest test-two-output-types-with-matching-fields-are-clean
+  (let [spec {:output_types [{:name "User" :fields {:id "String!"}}]
+              :endpoints [{:name "op1" :type "query"
+                           :output_type {:name "User" :fields {:id "String!"}}}]}]
+    (is (= [] (linter/lint-spec spec)))))
+
+(deftest test-two-output-types-with-conflicting-field-flagged
+  (let [spec {:output_types [{:name "User" :fields {:id "String!"}}]
+              :endpoints [{:name "op1" :type "query"
+                           :output_type {:name "User" :fields {:id "Int!"}}}]}
+        [p]  (linter/lint-spec spec)]
+    (is (= :error (:severity p)))
+    (is (str/includes? (:message p) "id"))
+    (is (str/includes? (:message p) "User"))))
+
+(deftest test-input-type-conflict-flagged
+  (let [spec (assoc minimal-spec :input_types
+                    [{:name "OrderInput" :fields {:sku "String!"}}
+                     {:name "OrderInput" :fields {:sku "Int!"}}])]
+    (is (= 1 (count (linter/lint-spec spec))))))
+
+(deftest test-three-defs-with-two-conflicts-produce-two-problems
+  (let [spec {:output_types [{:name "T" :fields {:a "String!"}}
+                             {:name "T" :fields {:a "Int!"}}
+                             {:name "T" :fields {:a "Boolean!"}}]
+              :endpoints [{:name "op" :type "query" :output_type "T"}]}]
+    (is (= 2 (count (linter/lint-spec spec))))))
+
+(deftest test-def1-def3-conflict-with-def2-not-mentioning-field
+  (let [spec {:output_types [{:name "T" :fields {:a "String!"}}
+                             {:name "T" :fields {:b "Int!"}}
+                             {:name "T" :fields {:a "Boolean!"}}]
+              :endpoints [{:name "op" :type "query" :output_type "T"}]}]
+    (is (= 1 (count (linter/lint-spec spec))))))

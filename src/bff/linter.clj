@@ -1,5 +1,6 @@
 (ns bff.linter
   (:require [clojure.string :as str]
+            [bff.jq-engine :as jq]
             [malli.core :as m]
             [malli.error :as me]))
 
@@ -188,33 +189,38 @@
      :message  (str "deps references unknown step '" dep "'")
      :node     step}))
 
-(defn- mapping-entries-in-step
-  "Yield [prefix mapping-map] pairs for every mapping-shaped block on the step."
-  [step-path step]
-  (keep (fn [k]
-          (when-let [m (get step k)]
-            [(str step-path "." (name k)) m]))
-        [:input_mapping :body_mapping]))
+(defn- walk-mapping-map [prefix m]
+  (mapcat (fn [[k v]]
+            (let [p (str prefix "." (name k))]
+              (cond
+                (not (map? v)) nil
+                (:source v)    [[p v]]
+                :else          (walk-mapping-map p v))))
+          m))
 
 (defn- walk-endpoint-mappings
-  "Yield [full-path entry enclosing-node] triples for every source-tagged
-   mapping entry in an endpoint. Covers step-level input/body/condition
-   plus endpoint-level output_mapping."
   [ei endpoint]
   (concat
+    (for [[si step]    (map-indexed vector (:backend_chain endpoint))
+          :let         [sp (str "endpoints[" ei "].backend_chain[" si "]")]
+          kind         [:input_mapping :body_mapping]
+          [path entry] (walk-mapping-map (str sp "." (name kind))
+                                         (get step kind))]
+      [path entry step])
     (for [[si step] (map-indexed vector (:backend_chain endpoint))
-          :let [step-path (str "endpoints[" ei "].backend_chain[" si "]")]
-          [prefix mapping-map] (mapping-entries-in-step step-path step)
-          [k entry] mapping-map
-          :when (and (map? entry) (:source entry))]
-      [(str prefix "." (name k)) entry step])
-    (for [[si step] (map-indexed vector (:backend_chain endpoint))
-          :when (:condition step)]
+          :when     (:condition step)]
       [(str "endpoints[" ei "].backend_chain[" si "].condition")
        (:condition step) step])
-    (for [[k entry] (:output_mapping endpoint)
-          :when (and (map? entry) (:source entry))]
-      [(str "endpoints[" ei "].output_mapping." (name k)) entry endpoint])))
+    (for [[si step]    (map-indexed vector (:backend_chain endpoint))
+          :when        (:compensation step)
+          :let         [sp (str "endpoints[" ei "].backend_chain[" si "].compensation")]
+          kind         [:input_mapping :body_mapping]
+          [path entry] (walk-mapping-map (str sp "." (name kind))
+                                         (get-in step [:compensation kind]))]
+      [path entry step])
+    (for [[path entry] (walk-mapping-map (str "endpoints[" ei "].output_mapping")
+                                         (:output_mapping endpoint))]
+      [path entry endpoint])))
 
 (defn- check-step-refs [spec]
   (for [[ei endpoint] (map-indexed vector (:endpoints spec))
@@ -326,6 +332,21 @@
                                   expected (:type d) (:def d)))))
     (group-by (juxt :type-name :field) (all-field-decls spec))))
 
+(defn- try-compile-jq [expr]
+  (try (jq/compile-query expr) nil
+       (catch Exception e (.getMessage e))))
+
+(defn- check-jq-compiles [spec]
+  (for [[ei endpoint]  (map-indexed vector (:endpoints spec))
+        [path entry _] (walk-endpoint-mappings ei endpoint)
+        :when          (:jq entry)
+        :let           [err (try-compile-jq (:jq entry))]
+        :when          err]
+    {:severity :error
+     :path     (str path ".jq")
+     :message  (str "jq failed to compile: " err)
+     :node     entry}))
+
 (defn- structural-problems [spec]
   (when-let [errors (:errors (m/explain spec-schema spec))]
     (mapv #(explain-error->problem spec %) errors)))
@@ -337,7 +358,8 @@
     (check-step-refs spec)
     (check-arg-refs spec)
     (check-type-refs spec)
-    (check-type-merges spec)))
+    (check-type-merges spec)
+    (check-jq-compiles spec)))
 
 (defn lint-spec
   [spec]

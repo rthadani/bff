@@ -168,3 +168,32 @@
                              {:name "T" :fields {:a "Boolean!"}}]
               :endpoints [{:name "op" :type "query" :output_type "T"}]}]
     (is (= 1 (count (linter/lint-spec spec))))))
+
+(deftest test-valid-jq-is-clean
+  (let [spec (with-chain minimal-spec
+                         [{:id "a" :url "http://x" :method "GET"
+                           :body_mapping {:id {:source "step" :step_id "a" :jq ".data.id"}}}])]
+    (is (= [] (linter/lint-spec spec)))))
+
+(deftest test-bad-jq-in-body-mapping-flagged
+  (let [spec (with-chain minimal-spec
+                         [{:id "a" :url "http://x" :method "GET"
+                           :body_mapping {:id {:source "step" :step_id "a" :jq ".x[|"}}}])
+        [p]  (linter/lint-spec spec)]
+    (is (= :error (:severity p)))
+    (is (str/includes? (:message p) "jq failed"))))
+
+(deftest test-bad-jq-in-compensation-flagged
+  (let [spec (with-chain minimal-spec
+                         [{:id "a" :url "http://x" :method "GET"
+                           :compensation {:url "http://undo" :method "DELETE"
+                                          :input_mapping
+                                          {:id {:source "step" :step_id "a" :jq ".x[|"}}}}])]
+    (is (= 1 (count (linter/lint-spec spec))))))
+
+(deftest test-bad-jq-in-nested-output-mapping-flagged
+  (let [spec (-> minimal-spec
+                 (with-chain [{:id "a" :url "http://x" :method "GET"}])
+                 (assoc-in [:endpoints 0 :output_mapping]
+                           {:profile {:id {:source "step" :step_id "a" :jq ".{{{"}}}))]
+    (is (= 1 (count (linter/lint-spec spec))))))

@@ -1,5 +1,6 @@
 (ns bff.linter-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is]]
             [bff.linter :as linter]))
 
 (deftest test-problem-shape-round-trips
@@ -79,3 +80,56 @@
         problems (linter/lint-spec spec)]
     (is (= 2 (count problems)))
     (is (every? #(= :warning (:severity %)) problems))))
+
+(defn- with-chain [spec chain]
+  (update-in spec [:endpoints 0] assoc :backend_chain chain))
+
+(deftest test-duplicate-step-ids-are-flagged
+  (let [spec (with-chain minimal-spec
+                         [{:id "a" :url "http://x" :method "GET"}
+                          {:id "a" :url "http://y" :method "GET"}])
+        [p] (linter/lint-spec spec)]
+    (is (= :error (:severity p)))
+    (is (str/includes? (:message p) "duplicate step id"))))
+
+(deftest test-deps-referencing-unknown-step-is-flagged
+  (let [spec (with-chain minimal-spec
+                         [{:id "a" :url "http://x" :method "GET"}
+                          {:id "b" :url "http://y" :method "GET" :deps ["nope"]}])
+        [p] (linter/lint-spec spec)]
+    (is (= "endpoints[0].backend_chain[1].deps[0]" (:path p)))
+    (is (str/includes? (:message p) "unknown step 'nope'"))))
+
+(deftest test-step-ref-in-input-mapping-is-flagged
+  (let [spec (with-chain minimal-spec
+                         [{:id "a" :url "http://x" :method "GET"
+                           :input_mapping {:id {:source "step" :step_id "ghost" :key "x"}}}])]
+    (is (= 1 (count (linter/lint-spec spec))))))
+
+(deftest test-arg-ref-not-declared-is-flagged
+  (let [spec (with-chain minimal-spec
+                         [{:id "a" :url "http://x" :method "GET"
+                           :input_mapping {:id {:source "args" :key "userId"}}}])]
+    (is (= 1 (count (linter/lint-spec spec))))))
+
+(deftest test-arg-ref-declared-is-clean
+  (let [spec (-> minimal-spec
+                 (assoc-in [:endpoints 0 :args] {:userId {:type "String!"}})
+                 (with-chain [{:id "a" :url "http://x" :method "GET"
+                               :input_mapping {:id {:source "args" :key "userId"}}}]))]
+    (is (= [] (linter/lint-spec spec)))))
+
+(deftest test-unknown-type-in-output-fields-is-flagged
+  (let [spec (assoc-in minimal-spec [:endpoints 0 :output_type :fields :other] "Widget")]
+    (is (= 1 (count (linter/lint-spec spec))))))
+
+(deftest test-top-level-output-type-ref-resolves
+  (let [spec {:output_types [{:name "Widget" :fields {:sku "String!"}}]
+              :endpoints [{:name "op" :type "query" :output_type "Widget"}]}]
+    (is (= [] (linter/lint-spec spec)))))
+
+(deftest test-scalar-declared-in-scalars-resolves
+  (let [spec (-> minimal-spec
+                 (assoc :scalars [{:name "DateTime"}])
+                 (assoc-in [:endpoints 0 :output_type :fields :when] "DateTime!"))]
+    (is (= [] (linter/lint-spec spec)))))

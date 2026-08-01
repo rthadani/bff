@@ -197,3 +197,54 @@
                  (assoc-in [:endpoints 0 :output_mapping]
                            {:profile {:id {:source "step" :step_id "a" :jq ".{{{"}}}))]
     (is (= 1 (count (linter/lint-spec spec))))))
+
+(deftest test-lint-file-against-demo-spec
+  (let [problems (linter/lint-file "resources/bff-spec.yaml")
+        paths    (set (map :path problems))]
+    (is (= 2 (count problems)))
+    (is (contains? paths "endpoints[0].backend_chain[2].input_mapping.limit.source"))
+    (is (contains? paths "endpoints[1].backend_chain[1].body_mapping.template.source"))
+    (is (every? #(= :error (:severity %)) problems))))
+
+(deftest test-kitchen-sink-composed-problems
+  (let [spec {:input_types [{:name "OrderInput" :fields {:sku "String!"}}
+                            {:name "OrderInput" :fields {:sku "Int!"}}]
+              :endpoints
+              [{:name "op"
+                :type "query"
+                :args {:userId {:type "String!"}}
+                :output_type {:name "R"
+                              :fields {:id "String!" :other "Widget"}}
+                :backend_chain
+                [{:id "a" :url "http://x" :method "GET"}
+                 {:id "a" :url "http://y" :method "GET"
+                  :deps ["ghost"]
+                  :body_mapping {:x {:source "args" :key "missing"}
+                                 :y {:source "step" :step_id "nope" :jq ".{"}}}]}]}
+        problems (linter/lint-spec spec)
+        by-kind  (fn [substr] (filter #(str/includes? (:message %) substr) problems))]
+    (is (seq (by-kind "conflicting"))
+        "input_type merge conflict")
+    (is (seq (by-kind "duplicate step id"))
+        "duplicate step id")
+    (is (seq (by-kind "unknown step 'ghost'"))
+        "deps unknown")
+    (is (seq (by-kind "unknown step 'nope'"))
+        "step ref unknown")
+    (is (seq (by-kind "unknown arg 'missing'"))
+        "arg ref unknown")
+    (is (seq (by-kind "unknown type 'Widget'"))
+        "type ref unknown")
+    (is (seq (by-kind "jq failed"))
+        "bad jq")))
+
+(deftest test-format-problem-contains-all-parts
+  (let [p {:severity :warning
+           :path     "endpoints[0].name"
+           :message  "example message"
+           :node     {:id "s" :url "http://x"}}
+        out (#'linter/format-problem p)]
+    (is (str/includes? out "WARNING"))
+    (is (str/includes? out "endpoints[0].name"))
+    (is (str/includes? out "example message"))
+    (is (str/includes? out ":id \"s\""))))

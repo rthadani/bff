@@ -178,6 +178,14 @@ definitions while catching accidental collisions at boot.
     key: "prefix:{argName}"  # cache key template — same placeholder syntax as url
     ttl: 60000               # TTL in milliseconds (default 60000)
 
+  # Invalidate cache entries after a successful step. Useful on mutations
+  # that shadow cached reads. Placeholders resolve against args + chain-ctx
+  # augmented with this step's own response, so {id} can reference a field
+  # returned by the step that just ran. Silent no-op if no cache registered.
+  cache_invalidate:
+    - "profile:{id}"
+    - "ssid-config:{customerId}"
+
   # Retry on selected failure codes
   retry:
     max: 2                             # max additional attempts (3 calls total)

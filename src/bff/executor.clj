@@ -83,6 +83,10 @@
                                  :step-id step-id})]
           (when (and cache-key (= :ok (:status result)))
             (cache/save cache-store cache-key result (:ttl cache-cfg 60000)))
+          (when (and (seq (:cache_invalidate step)) (= :ok (:status result)))
+            (let [ctx (assoc chain-ctx step-id result)]
+              (doseq [tmpl (:cache_invalidate step)]
+                (cache/invalidate cache-store (interpolate-url tmpl args ctx)))))
           result))))
 
 (defn- execute-step-with-retry

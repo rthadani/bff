@@ -5,10 +5,10 @@
             [bff.http-client :as http]))
 
 (defn- run-sync! [task]
-  (let [p (java.util.concurrent.CompletableFuture.)]
-    (task #(.complete p %) #(.completeExceptionally p %))
-    (try (.get p)
-         (catch java.util.concurrent.ExecutionException e (throw (.getCause e))))))
+  (let [p (promise)]
+    (task #(deliver p [:ok %]) #(deliver p [:err %]))
+    (let [[tag v] @p]
+      (if (= :err tag) (throw v) v))))
 
 (defn- fake-store [state]
   (reify cache/CacheStore

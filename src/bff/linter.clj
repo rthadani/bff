@@ -82,6 +82,7 @@
    [:extra_headers {:optional true} [:map-of :any :string]]
    [:cache         {:optional true}
     [:map {:closed true} [:key :string] [:ttl {:optional true} :int]]]
+   [:cache_invalidate {:optional true} [:sequential :string]]
    [:retry         {:optional true} retry-schema]
    [:errors        {:optional true} [:map-of :any :string]]
    [:compensation  {:optional true} compensation-schema]])

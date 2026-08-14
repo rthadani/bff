@@ -32,7 +32,9 @@
           data        (error/safe-data step-result)]
       (when data
         (if-let [q (:compiled-jq mapping)]
-          (jq/execute q data)
+          (if-let [node (:node step-result)]
+            (jq/execute-node q node)
+            (jq/execute q data))
           (get data (keyword (:key mapping))))))
 
     :value
@@ -190,7 +192,10 @@
       (when-not skip?
         (let [raw    (m/? (m/via m/blk
                                  (execute-step-with-retry step args chain-ctx request-ctx extensions)))
-              result (apply-error-mapping step raw)]
+              mapped (apply-error-mapping step raw)
+              result (if (= :ok (:status mapped))
+                       (assoc mapped :node (jq/to-node (:data mapped)))
+                       mapped)]
           (cond-> {:step-id (keyword (:id step)) :result result}
             (and (= :ok (:status result)) (:compensation step))
             (assoc :compensation (:compensation step))))))))

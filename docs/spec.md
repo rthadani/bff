@@ -163,7 +163,7 @@ definitions while catching accidental collisions at boot.
       source: args | step | value | ctx
       key: argName           # for args/ctx sources
       step_id: step_name     # for step source
-      jq: ".nested.field"    # jq path (step source only)
+      jq: ".nested.field"    # jq expression; applies to step data, args, or ctx
       value: "literal"       # for value source
 
   # Request body (POST/PUT/PATCH)

@@ -13,12 +13,19 @@
             [clojure.string :as str]
             [taoensso.timbre :as log]))
 
+(defn- maybe-jq
+  "Apply the mapping's compiled jq to `v` if declared, else return v."
+  [mapping v]
+  (if-let [q (:compiled-jq mapping)]
+    (jq/execute q v)
+    v))
+
 (defn- resolve-value
   [mapping args chain-ctx request-ctx]
   (case (keyword (:source mapping))
 
     :args
-    (get args (keyword (:key mapping)))
+    (maybe-jq mapping (get args (keyword (:key mapping))))
 
     :step
     (let [step-result (get chain-ctx (keyword (:step_id mapping)))
@@ -32,7 +39,7 @@
     (:value mapping)
 
     :ctx
-    (get request-ctx (keyword (:key mapping)))
+    (maybe-jq mapping (get request-ctx (keyword (:key mapping))))
 
     nil))
 

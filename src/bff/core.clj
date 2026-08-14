@@ -32,7 +32,8 @@
   <div id=\"graphiql\">Loading...</div>
   <script src=\"https://unpkg.com/graphiql@2.4.7/graphiql.min.js\"></script>
   <script type=\"module\">
-    const { buildSchema } = await import('https://esm.sh/graphql@16.9.0');
+    const { buildSchema, introspectionFromSchema } =
+      await import('https://esm.sh/graphql@16.9.0');
     const fetcher = async (params, opts) => {
       const extra = (opts && opts.headers) || {};
       return fetch('/graphql', {
@@ -41,10 +42,13 @@
         body: JSON.stringify(params),
       }).then(r => r.json());
     };
+    // GraphiQL bundles its own graphql-js so instanceof checks fail across
+    // module copies. Feed it an introspection JSON instead — GraphiQL
+    // accepts that shape whichever graphql built the schema.
     let schema = null;
     try {
       const r = await fetch('/schema.graphqls');
-      if (r.ok) schema = buildSchema(await r.text());
+      if (r.ok) schema = introspectionFromSchema(buildSchema(await r.text()));
     } catch (e) { /* fall back to introspection */ }
     const props = schema ? { fetcher, schema } : { fetcher };
     ReactDOM.createRoot(document.getElementById('graphiql')).render(

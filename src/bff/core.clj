@@ -32,12 +32,14 @@
   <div id=\"graphiql\">Loading...</div>
   <script src=\"https://unpkg.com/graphiql@2.4.7/graphiql.min.js\"></script>
   <script>
-    const fetcher = async (params) =>
-      fetch('/graphql', {
+    const fetcher = async (params, opts) => {
+      const extra = (opts && opts.headers) || {};
+      return fetch('/graphql', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: Object.assign({ 'Content-Type': 'application/json' }, extra),
         body: JSON.stringify(params),
       }).then(r => r.json());
+    };
     ReactDOM.createRoot(document.getElementById('graphiql')).render(
       React.createElement(GraphiQL, { fetcher })
     );

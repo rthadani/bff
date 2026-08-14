@@ -86,3 +86,16 @@
   (let [config  (.build (BffConfig/builder))
         servlet (Bff/createServlet "spec-loader-fixture.yaml" config)]
     (is (instance? io.github.rthadani.bff.BffServlet servlet))))
+
+(deftest test-handler-serves-schema-graphqls
+  (let [handler (Bff/createHandler "spec-loader-fixture.yaml")
+        response (handler {:request-method :get :uri "/schema.graphqls"})]
+    (is (= 200 (:status response)))
+    (is (= "application/graphql" (get-in response [:headers "Content-Type"])))
+    (let [body (:body response)]
+      (is (clojure.string/includes? body "type Query"))
+      (is (clojure.string/includes? body "getUser"))
+      (is (clojure.string/includes? body "type Mutation"))
+      (is (clojure.string/includes? body "createOrder"))
+      (is (clojure.string/includes? body "type User"))
+      (is (clojure.string/includes? body "type OrderResult")))))

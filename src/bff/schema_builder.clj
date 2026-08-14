@@ -177,18 +177,10 @@
 (defn- build-scalars [spec-scalars scalar-cfgs]
   (into {} (map #(build-scalar-entry scalar-cfgs %)) spec-scalars))
 
-(defn build-schema
-  "Compile a Lacinia schema from `spec`. `extensions` is the caller-owned
-   config map ({:enrichers :validators :transformers :resolvers :retry-hooks
-   :cache :scalars}); it is closed over every resolver so runtime requests
-   carry it into bff.executor/run-endpoint.
-
-   Object types can be declared inline on each endpoint's `output_type` or at
-   the top level under `output_types:` (referenced from an endpoint by bare
-   name). Duplicate type names are merged field-by-field; conflicting types
-   on a shared field name throw. Input types (`input_types:`) get the same
-   treatment."
-  ([spec] (build-schema spec {}))
+(defn build-schema-map
+  "Intermediate schema map, before schema/compile. Public so SDL emission
+   can share the same source."
+  ([spec] (build-schema-map spec {}))
   ([spec extensions]
    (let [endpoints (:endpoints spec)
          queries   (filter #(= (:type %) "query") endpoints)
@@ -206,9 +198,23 @@
 
          scalars    (build-scalars (get spec :scalars []) (:scalars extensions))]
 
-     (-> (cond-> {:objects        objects
-                  :input-objects  input-objs
-                  :queries        (->> queries  (map #(build-operation % extensions)) (apply merge {}))
-                  :mutations      (->> mutations (map #(build-operation % extensions)) (apply merge {}))}
-           (seq scalars) (assoc :scalars scalars))
-         schema/compile))))
+     (cond-> {:objects        objects
+              :input-objects  input-objs
+              :queries        (->> queries  (map #(build-operation % extensions)) (apply merge {}))
+              :mutations      (->> mutations (map #(build-operation % extensions)) (apply merge {}))}
+       (seq scalars) (assoc :scalars scalars)))))
+
+(defn build-schema
+  "Compile a Lacinia schema from `spec`. `extensions` is the caller-owned
+   config map ({:enrichers :validators :transformers :resolvers :retry-hooks
+   :cache :scalars}); it is closed over every resolver so runtime requests
+   carry it into bff.executor/run-endpoint.
+
+   Object types can be declared inline on each endpoint's `output_type` or at
+   the top level under `output_types:` (referenced from an endpoint by bare
+   name). Duplicate type names are merged field-by-field; conflicting types
+   on a shared field name throw. Input types (`input_types:`) get the same
+   treatment."
+  ([spec] (build-schema spec {}))
+  ([spec extensions]
+   (schema/compile (build-schema-map spec extensions))))

@@ -1,7 +1,9 @@
 (ns bff.core
   (:require [bff.spec-loader :as loader]
             [bff.schema-builder :as schema-builder]
+            [bff.sdl :as sdl]
             [com.walmartlabs.lacinia :as lacinia]
+            [com.walmartlabs.lacinia.schema :as lacinia-schema]
             [ring.middleware.json :refer [wrap-json-body wrap-json-response]]
             [ring.middleware.params :refer [wrap-params]]
             [ring.util.response :as resp]
@@ -43,11 +45,17 @@
 </body>
 </html>")
 
-(defn- graphql-handler [compiled-schema forward-headers]
+(defn- graphql-handler [compiled-schema forward-headers sdl-text expose-schema?]
   (fn [request]
     (let [method (:request-method request)
           uri    (:uri request)]
       (cond
+        (and (= :get method) (= uri "/schema.graphqls"))
+        (if expose-schema?
+          (-> (resp/response sdl-text)
+              (resp/content-type "application/graphql"))
+          (-> (resp/response "Not Found") (resp/status 404)))
+
         (and (= :get method) (= uri "/graphiql"))
         (-> (resp/response graphiql-html)
             (resp/content-type "text/html"))
@@ -78,8 +86,8 @@
                 (resp/header "Content-Type" "application/json")
                 (resp/header "Access-Control-Allow-Origin" "*"))))))))
 
-(defn- build-handler [compiled-schema forward-headers]
-  (-> (graphql-handler compiled-schema forward-headers)
+(defn- build-handler [compiled-schema forward-headers sdl-text expose-schema?]
+  (-> (graphql-handler compiled-schema forward-headers sdl-text expose-schema?)
       (wrap-json-body {:keywords? true})
       wrap-json-response
       wrap-params))
@@ -111,11 +119,15 @@
   ([spec-path] (create-handler spec-path {}))
   ([spec-path extensions]
    (log/infof "Loading spec: %s" spec-path)
-   (let [spec         (loader/load-and-compile spec-path)
-         schema       (schema-builder/build-schema spec extensions)
-         fwd-headers  (let [h (:forward_headers spec)]
-                        (if (seq h) h default-forward-headers))]
-     (log/infof "Schema loaded: %d endpoints, forwarding headers: %s"
-                (count (:endpoints spec)) fwd-headers)
-     (build-handler schema fwd-headers))))
+   (let [spec            (loader/load-and-compile spec-path)
+         schema-map      (schema-builder/build-schema-map spec extensions)
+         schema          (lacinia-schema/compile schema-map)
+         sdl-text        (sdl/emit-sdl schema-map)
+         expose-schema?  (get spec :expose_schema true)
+         fwd-headers     (let [h (:forward_headers spec)]
+                           (if (seq h) h default-forward-headers))]
+     (log/infof "Schema loaded: %d endpoints, forwarding headers: %s, /schema.graphqls %s"
+                (count (:endpoints spec)) fwd-headers
+                (if expose-schema? "exposed" "disabled"))
+     (build-handler schema fwd-headers sdl-text expose-schema?))))
 

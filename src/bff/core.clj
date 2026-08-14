@@ -26,13 +26,13 @@
   <style>body { height: 100%; margin: 0; overflow: hidden; } #graphiql { height: 100vh; }</style>
   <script crossorigin src=\"https://unpkg.com/react@18.2.0/umd/react.production.min.js\"></script>
   <script crossorigin src=\"https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js\"></script>
-  <script crossorigin src=\"https://unpkg.com/graphql@16.9.0/index.js\"></script>
   <link rel=\"stylesheet\" href=\"https://unpkg.com/graphiql@2.4.7/graphiql.min.css\" />
 </head>
 <body>
   <div id=\"graphiql\">Loading...</div>
   <script src=\"https://unpkg.com/graphiql@2.4.7/graphiql.min.js\"></script>
-  <script>
+  <script type=\"module\">
+    const { buildSchema } = await import('https://esm.sh/graphql@16.9.0');
     const fetcher = async (params, opts) => {
       const extra = (opts && opts.headers) || {};
       return fetch('/graphql', {
@@ -41,19 +41,15 @@
         body: JSON.stringify(params),
       }).then(r => r.json());
     };
-    (async () => {
-      let schema = null;
-      try {
-        const sdl = await fetch('/schema.graphqls').then(r => r.ok ? r.text() : null);
-        if (sdl && window.GraphQL && window.GraphQL.buildSchema) {
-          schema = window.GraphQL.buildSchema(sdl);
-        }
-      } catch (e) { /* fall back to introspection */ }
-      const props = schema ? { fetcher, schema } : { fetcher };
-      ReactDOM.createRoot(document.getElementById('graphiql')).render(
-        React.createElement(GraphiQL, props)
-      );
-    })();
+    let schema = null;
+    try {
+      const r = await fetch('/schema.graphqls');
+      if (r.ok) schema = buildSchema(await r.text());
+    } catch (e) { /* fall back to introspection */ }
+    const props = schema ? { fetcher, schema } : { fetcher };
+    ReactDOM.createRoot(document.getElementById('graphiql')).render(
+      React.createElement(GraphiQL, props)
+    );
   </script>
 </body>
 </html>")

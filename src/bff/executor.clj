@@ -65,8 +65,10 @@
                                  (some #(get (error/safe-data %) kw)))
                             ""))))))
 
-(defn- execute-step
-  "Execute one backend chain step. Returns a tagged result map.
+(declare resolve-endpoint)
+
+(defn- execute-http-step
+  "Execute one HTTP backend chain step. Returns a tagged result map.
    Never throws — errors are captured in the result."
   [step args chain-ctx request-ctx cache-store]
   (let [step-id   (keyword (:id step))
@@ -96,19 +98,48 @@
                 (cache/invalidate cache-store (interpolate-url tmpl args ctx)))))
           result))))
 
+(defn- execute-resolver-step
+  "Execute a backend chain step that runs a resolver. Resolver args come
+   from the step's :input_mapping, resolver ctx is request-ctx. The resolver's
+   :data becomes the step's data; :errors become the step error."
+  [step args chain-ctx request-ctx extensions]
+  (let [step-id       (keyword (:id step))
+        resolver-cfg  (:resolver step)
+        resolver-args (or (resolve-param-map (:input_mapping step) args chain-ctx request-ctx) {})
+        resolver      (registry/resolve-impl resolver-cfg (:resolvers extensions) "resolver")]
+    (log/infof "Step [%s] → resolver %s" (name step-id) (or (:key resolver-cfg) "inline"))
+    (try
+      (let [result (resolve-endpoint resolver resolver-args request-ctx)
+            errors (:errors result)]
+        (if (seq errors)
+          {:status :error :error (first errors)}
+          {:status :ok :data (:data result)}))
+      (catch Exception e
+        {:status :error
+         :error  {:code    :resolver_error
+                  :message (.getMessage e)
+                  :step-id step-id}}))))
+
+(defn- execute-step
+  "Dispatch a step to the HTTP or resolver executor based on its shape."
+  [step args chain-ctx request-ctx extensions]
+  (if (:resolver step)
+    (execute-resolver-step step args chain-ctx request-ctx extensions)
+    (execute-http-step step args chain-ctx request-ctx (:cache extensions))))
+
 (defn- execute-step-with-retry
   "Run a step and, if it declares a :retry policy, re-run it up to :max more
    times when the result's error code matches :on_code. An optional
    :before_retry hook is invoked between attempts and can rewrite the
    request-ctx (e.g. inject a refreshed auth token).
 
-   `extensions` supplies :cache and :retry-hooks."
+   `extensions` supplies :cache, :retry-hooks, and :resolvers."
   [step args chain-ctx request-ctx extensions]
-  (let [{:keys [cache retry-hooks]} extensions]
+  (let [{:keys [retry-hooks]} extensions]
     (if-let [retry-cfg (:retry step)]
       (loop [attempt     0
              current-ctx request-ctx]
-        (let [result (execute-step step args chain-ctx current-ctx cache)]
+        (let [result (execute-step step args chain-ctx current-ctx extensions)]
           (if (retry/should-retry? retry-cfg result attempt)
             (let [next-attempt (inc attempt)
                   new-ctx (retry/apply-before-retry
@@ -124,7 +155,7 @@
                          (:id step) next-attempt (get-in result [:error :code]))
               (recur next-attempt new-ctx))
             result)))
-      (execute-step step args chain-ctx request-ctx cache))))
+      (execute-step step args chain-ctx request-ctx extensions))))
 
 (defn- apply-error-mapping
   "If the step declares an :errors map and the result is an error, remap
@@ -184,7 +215,7 @@
   (doseq [{:keys [step-id compensation]} (reverse compensations)]
     (try
       (execute-step (assoc compensation :id (str "compensate-" (name step-id)))
-                    args chain-ctx request-ctx (:cache extensions))
+                    args chain-ctx request-ctx extensions)
       (catch Exception e
         (log/warnf "Compensation for step [%s] failed: %s"
                    step-id (.getMessage e))))))
@@ -293,9 +324,12 @@
      :retry-hooks  — {\"key\" impl}
      :cache        — a CacheStore, or nil
 
-   If the endpoint has a :resolver key, it is called instead of the
-   backend_chain. Partial failures are represented in :errors while :data
-   contains whatever fields could be resolved from successful steps."
+   If the endpoint has a top-level :resolver key, it is called instead of
+   the backend_chain. Alternatively, a resolver can be embedded as one step
+   in a backend_chain (via {:id ... :resolver {:key \"...\"} :input_mapping
+   ...}); it runs like any other step and its :data becomes the step's
+   output. Partial failures are represented in :errors while :data contains
+   whatever fields could be resolved from successful steps."
   [endpoint args request-ctx extensions]
   (m/sp
     (let [request-ctx (enricher/enrich-ctx request-ctx (:enrichers extensions))]

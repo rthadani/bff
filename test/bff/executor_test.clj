@@ -413,6 +413,49 @@
     (is (= 1 (count errors)))
     (is (= "java-side failure" (:message (first errors))))))
 
+(deftest test-resolver-as-step-feeds-downstream-output-mapping
+  (testing "a resolver embedded as a chain step exposes :data to output_mapping"
+    (with-redefs [http/call (fn [_] (http/ok {:speeds [10.0 20.0 30.0]}))]
+      (let [compute (fn [args _ctx]
+                      {:data   {:mean (/ (reduce + (:speeds args)) (count (:speeds args)))
+                                :n    (count (:speeds args))}
+                       :errors []})
+            endpoint {:backend_chain
+                      [(assoc base-step :id "fetch")
+                       {:id            "efficiency"
+                        :resolver      {:key "compute-mean"}
+                        :deps          ["fetch"]
+                        :input_mapping {:speeds {:source "step"
+                                                 :step_id "fetch"
+                                                 :jq ".speeds"
+                                                 :compiled-jq (jq/compile-query ".speeds")}}}]
+                      :output_mapping
+                      {:mean {:source "step" :step_id "efficiency"
+                              :jq ".mean" :compiled-jq (jq/compile-query ".mean")}
+                       :n    {:source "step" :step_id "efficiency"
+                              :jq ".n"    :compiled-jq (jq/compile-query ".n")}}}
+            {:keys [data errors]} (run-with-exts endpoint {} {}
+                                                 {:resolvers {"compute-mean" compute}})]
+        (is (empty? errors))
+        (is (= 20.0 (:mean data)))
+        (is (= 3    (:n data)))))))
+
+(deftest test-resolver-as-step-errors-surface-through-chain
+  (testing "resolver returning errors marks the step failed and surfaces the error"
+    (with-redefs [http/call (fn [_] (http/ok {:x 1}))]
+      (let [bad (fn [_args _ctx]
+                  {:data nil :errors [{:message "boom"}]})
+            endpoint {:backend_chain
+                      [(assoc base-step :id "fetch")
+                       {:id       "compute"
+                        :resolver {:key "bad-resolver"}
+                        :deps     ["fetch"]
+                        :critical true}]
+                      :output_mapping {}}]
+        (is (thrown? clojure.lang.ExceptionInfo
+              (run-with-exts endpoint {} {}
+                             {:resolvers {"bad-resolver" bad}})))))))
+
 (deftest test-run-endpoint-nested-output-mapping-with-jq
   (with-redefs [http/call (fn [_] (http/ok {:user {:id "u1" :score 99}}))]
     (let [endpoint (assoc base-endpoint

@@ -37,6 +37,30 @@
                           :compensation {:url "http://undo" :method "DELETE"}}])]
     (is (= [] (linter/lint-spec spec)))))
 
+(deftest test-resolver-step-without-url-is-clean
+  (let [spec (update-in minimal-spec [:endpoints 0]
+                        assoc :backend_chain
+                        [{:id "s1" :url "http://api" :method "GET"}
+                         {:id       "compute"
+                          :resolver {:key "my-resolver"}
+                          :deps     ["s1"]}])]
+    (is (= [] (linter/lint-spec spec)))))
+
+(deftest test-step-with-both-url-and-resolver-is-caught
+  (let [spec (update-in minimal-spec [:endpoints 0]
+                        assoc :backend_chain
+                        [{:id       "bad"
+                          :url      "http://api"
+                          :method   "GET"
+                          :resolver {:key "r"}}])]
+    (is (= 1 (count (linter/lint-spec spec))))))
+
+(deftest test-step-with-neither-url-nor-resolver-is-caught
+  (let [spec (update-in minimal-spec [:endpoints 0]
+                        assoc :backend_chain
+                        [{:id "empty"}])]
+    (is (= 1 (count (linter/lint-spec spec))))))
+
 (deftest test-typo-key-on-backend-step-is-caught
   (let [spec (update-in minimal-spec [:endpoints 0]
                         assoc :backend_chain

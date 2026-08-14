@@ -70,22 +70,30 @@
    [:extra_headers {:optional true} [:map-of :any :string]]])
 
 (def ^:private backend-step-schema
-  [:map {:closed true}
-   [:id     :string]
-   [:url    :string]
-   [:method http-method]
-   [:deps          {:optional true} [:sequential :string]]
-   [:critical      {:optional true} :boolean]
-   [:condition     {:optional true} mapping-entry]
-   [:input_mapping {:optional true} [:map-of :any mapping-entry]]
-   [:body_mapping  {:optional true} [:map-of :any mapping-entry]]
-   [:extra_headers {:optional true} [:map-of :any :string]]
-   [:cache         {:optional true}
-    [:map {:closed true} [:key :string] [:ttl {:optional true} :int]]]
-   [:cache_invalidate {:optional true} [:sequential :string]]
-   [:retry         {:optional true} retry-schema]
-   [:errors        {:optional true} [:map-of :any :string]]
-   [:compensation  {:optional true} compensation-schema]])
+  [:and
+   [:map {:closed true}
+    [:id     :string]
+    [:url    {:optional true} :string]
+    [:method {:optional true} http-method]
+    [:resolver         {:optional true} extension-ref]
+    [:deps             {:optional true} [:sequential :string]]
+    [:critical         {:optional true} :boolean]
+    [:condition        {:optional true} mapping-entry]
+    [:input_mapping    {:optional true} [:map-of :any mapping-entry]]
+    [:body_mapping     {:optional true} [:map-of :any mapping-entry]]
+    [:extra_headers    {:optional true} [:map-of :any :string]]
+    [:cache            {:optional true}
+     [:map {:closed true} [:key :string] [:ttl {:optional true} :int]]]
+    [:cache_invalidate {:optional true} [:sequential :string]]
+    [:retry            {:optional true} retry-schema]
+    [:errors           {:optional true} [:map-of :any :string]]
+    [:compensation     {:optional true} compensation-schema]]
+   [:fn {:error/message "step must have either (url + method) or resolver, not both"}
+    (fn [{:keys [url method resolver]}]
+      (let [http? (or url method)]
+        (if resolver
+          (not http?)
+          (and url method))))]])
 
 (def ^:private object-type-registry
   {::object-type

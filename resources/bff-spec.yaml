@@ -195,6 +195,14 @@ endpoints:
             source: args
             key: priority
 
+          # jq expression on an args source — compute total_units by summing
+          # the quantity field across every line item. Runs before the request
+          # body is built; no resolver or transformer needed.
+          total_units:
+            source: args
+            key: items
+            jq: "[.[].quantity] | add"
+
       - id: notify_user
         url: "${API_BASE_URL:-http://localhost:3001}/api/v1/notify"
         method: POST

@@ -78,6 +78,25 @@ curl -X POST http://localhost:8080 \
 - [Extensions](docs/extensions.md) — validators, transformers, and resolvers in Clojure and Java
 - [Spring Boot 3](docs/spring-boot.md) — Jakarta servlet bridge and extension registration
 
+## Alternatives
+
+Several tools solve a similar problem:
+
+| Tool | Runtime | Config |
+|------|---------|--------|
+| [GraphQL Mesh](https://the-guild.dev/graphql/mesh) | Node.js | YAML |
+| [Tailcall](https://tailcall.run) | Rust | SDL |
+| [Apollo Connectors](https://www.apollographql.com/docs/graphos/connectors) | Rust (Router) | SDL directives |
+| [StepZen](https://stepzen.com) (IBM) | Cloud SaaS | YAML + SDL |
+| [Hasura](https://hasura.io) | Go | Dashboard / metadata |
+
+GraphQL Mesh is the closest in spirit. Key differences:
+
+- Embeds as a Ring handler — no separate runtime or sidecar
+- jq for all mappings: input, body, and output
+- `critical` steps with `compensation` blocks for rollback
+- REST only
+
 ## Publishing
 
 Tag a release to deploy to Clojars:

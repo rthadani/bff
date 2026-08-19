@@ -30,6 +30,51 @@ Place your spec file anywhere on the classpath (e.g. `resources/bff-spec.yaml`).
 
 `create-handler` accepts a second map of extensions — all keys are optional. See [extensions.md](extensions.md) for the full API.
 
+## Reitit integration
+
+If you're using [Reitit](https://github.com/metosin/reitit) for routing, mount the BFF handler as a catch-all route under `/graphql`:
+
+```clojure
+;; deps.edn
+metosin/reitit {:mvn/version "0.7.2"}
+```
+
+```clojure
+(require '[bff.core :as bff]
+         '[reitit.ring :as ring]
+         '[ring.adapter.jetty :refer [run-jetty]])
+
+(def bff-handler (bff/create-handler "bff-spec.yaml" {...}))
+
+(def app
+  (ring/ring-handler
+    (ring/router
+      [["/graphql"  {:handler bff-handler}]
+       ["/graphiql" {:handler bff-handler}]
+       ;; your other routes
+       ["/api/health" {:get (fn [_] {:status 200 :body "ok"})}]])
+    (ring/create-default-handler)))
+
+(run-jetty app {:port 8080 :join? false})
+```
+
+Reitit's middleware chain sits outside the BFF handler, so you can apply Buddy auth (or any other middleware) at the router level using `:middleware`:
+
+```clojure
+(require '[buddy.auth.middleware :refer [wrap-authentication wrap-authorization]]
+         '[buddy.auth.backends.token :refer [jws-backend]])
+
+(def backend (jws-backend {:secret (System/getenv "JWT_SECRET") :options {:alg :hs256}}))
+
+(def app
+  (ring/ring-handler
+    (ring/router
+      [["/graphiql" {:handler bff-handler}]   ; no auth middleware here
+       ["/graphql"  {:handler    bff-handler
+                     :middleware [[wrap-authentication backend]
+                                  [wrap-authorization  backend]]}]])))
+```
+
 ## Security
 
 BFF has no built-in auth. Use [Buddy](https://github.com/funcool/buddy-auth) middleware in front of the handler:

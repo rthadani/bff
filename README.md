@@ -2,15 +2,15 @@
 
 [![Clojars Project](https://img.shields.io/clojars/v/io.github.rthadani/bff.svg)](https://clojars.org/io.github.rthadani/bff)
 
-A spec-driven GraphQL Backend-for-Frontend engine in Clojure.  
-Write a YAML spec → get a fully functional GraphQL API. No boilerplate per endpoint.
+A spec-driven GraphQL Backend-for-Frontend engine in Clojure.
+Write a YAML spec and get a fully functional GraphQL API with no boilerplate per endpoint.
 
 ## How it works
 
 Define your endpoints in a YAML spec. The engine generates a Lacinia GraphQL
 schema, fans out HTTP calls to your backend services in parallel, maps the
 responses to your output types with jq, and returns a well-formed GraphQL
-response — including partial data and structured errors when things go wrong.
+response including partial data and structured errors when things go wrong.
 
 ```
 bff-spec.yaml
@@ -53,7 +53,7 @@ Create a spec file and start the handler:
      :transformers {"attach-warnings" my-transformer-fn}
      :resolvers    {"user-profile" my-resolver-fn}
      :cache        my-cache-store}))
-;; handler is a standard Ring handler — mount it however you like
+;; handler is a standard Ring handler
 ```
 
 Or run it standalone:

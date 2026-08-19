@@ -72,13 +72,7 @@ endpoints:
 Inline definitions (`output_type: {name: X, fields: ...}`) still work and can
 coexist with top-level declarations.
 
-**Duplicate definitions are merged field by field.** If the same type name
-appears in multiple places (top-level plus inline, or two inline definitions
-on different endpoints), the field sets are unioned. Fields that appear in
-both definitions must declare the same type; a mismatch throws at
-`create-handler` time with the type name, field name, and both conflicting
-declarations in `ex-data`. This lets you split large types across endpoint
-definitions while catching accidental collisions at boot.
+**Duplicate definitions are merged field by field.** If the same type name appears in multiple places (top-level plus inline, or two inline definitions on different endpoints), the field sets are unioned. Fields that appear in both definitions must declare the same type. A mismatch throws at `create-handler` time with the type name, field name, and both conflicting declarations in `ex-data`.
 
 ## Endpoint
 

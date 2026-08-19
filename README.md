@@ -77,6 +77,7 @@ curl -X POST http://localhost:8080 \
 - [Execution model](docs/execution.md) — waves, critical steps, partial failure, error codes
 - [Extensions](docs/extensions.md) — validators, transformers, and resolvers in Clojure and Java
 - [Spring Boot 3](docs/spring-boot.md) — Jakarta servlet bridge and extension registration
+- [Clojure](docs/clojure.md) — Ring handler mounting and Buddy auth integration
 
 ## Alternatives
 

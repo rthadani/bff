@@ -84,6 +84,7 @@
         headers     (->> (merge request-ctx (:extra_headers step {}))
                          (remove (fn [[_ v]] (nil? v)))
                          (into {} (map (fn [[k v]] [(name k) (str v)]))))
+
         cache-store (:cache extensions)
         http-client (:http-client extensions)
         cache-cfg   (:cache step)

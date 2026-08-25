@@ -91,9 +91,15 @@
                       (interpolate-url (:key cache-cfg) args chain-ctx))
         req         {:method method :url url :params params :body body
                      :headers headers :step-id step-id}]
-    (log/infof "Step [%s] → %s %s" (name step-id) (str/upper-case (name method)) url)
-    (or (when cache-key (cache/lookup cache-store cache-key))
-        (let [result (http/call http-client req)]
+    (log/infof "Step [%s] %s %s" (name step-id) (str/upper-case (name method)) url)
+    (log/debugf "Step [%s] params=%s body=%s headers=%s" (name step-id) params body headers)
+    (or (when-let [hit (and cache-key (cache/lookup cache-store cache-key))]
+          (log/debugf "Step [%s] cache hit for key=%s" (name step-id) cache-key)
+          hit)
+        (let [result (http/call http-client req)
+              _      (log/debugf "Step [%s] response status=%s data=%s"
+                                 (name step-id) (:status result)
+                                 (or (:data result) (get-in result [:error :detail]) (:error result)))]
           (when (and cache-key (= :ok (:status result)))
             (cache/save cache-store cache-key result (:ttl cache-cfg 60000)))
           (when (and (seq (:cache_invalidate step)) (= :ok (:status result)))
@@ -111,10 +117,12 @@
         resolver-cfg  (:resolver step)
         resolver-args (or (resolve-param-map (:input_mapping step) args chain-ctx request-ctx) {})
         resolver      (registry/resolve-impl resolver-cfg (:resolvers extensions) "resolver")]
-    (log/infof "Step [%s] → resolver %s" (name step-id) (or (:key resolver-cfg) "inline"))
+    (log/infof "Step [%s] resolver %s" (name step-id) (or (:key resolver-cfg) "inline"))
+    (log/debugf "Step [%s] resolver args=%s" (name step-id) resolver-args)
     (try
       (let [result (resolve-endpoint resolver resolver-args request-ctx)
             errors (:errors result)]
+        (log/debugf "Step [%s] resolver result=%s" (name step-id) (or (:data result) errors))
         (if (seq errors)
           {:status :error :error (first errors)}
           {:status :ok :data (:data result)}))
@@ -175,6 +183,9 @@
           mapped   (or (get mapping (:http-status result))
                        (get mapping semantic)
                        (get mapping (some-> semantic name)))]
+      (when mapped
+        (log/debugf "Step [%s] error code remapped %s -> %s"
+                    (:id step) (get-in result [:error :code]) mapped))
       (cond-> result mapped (assoc-in [:error :code] mapped)))
     result))
 
@@ -191,13 +202,19 @@
     (let [condition (:condition step)
           skip?     (when condition
                       (not (resolve-value condition args chain-ctx request-ctx)))]
-      (when-not skip?
+      (if skip?
+        (log/debugf "Step [%s] skipped (condition false)" (name (keyword (:id step))))
         (let [raw    (m/? (m/via m/blk
                                  (execute-step-with-retry step args chain-ctx request-ctx extensions)))
               mapped (apply-error-mapping step raw)
               result (if (= :ok (:status mapped))
                        (assoc mapped :node (jq/to-node (:data mapped)))
                        mapped)]
+          (when (= :error (:status result))
+            (log/warnf "Step [%s] failed: code=%s message=%s"
+                       (:id step)
+                       (get-in result [:error :code])
+                       (get-in result [:error :message])))
           (cond-> {:step-id (keyword (:id step)) :result result}
             (and (= :ok (:status result)) (:compensation step))
             (assoc :compensation (:compensation step))))))))
@@ -342,7 +359,8 @@
     (let [request-ctx (enricher/enrich-ctx request-ctx (:enrichers extensions))]
       (if-let [val-errors (validator/run-validation endpoint args request-ctx
                                                     (:validators extensions))]
-        {:data nil :errors val-errors}
+        (do (log/warnf "Validation failed: %s" (mapv :message val-errors))
+            {:data nil :errors val-errors})
         (if-let [resolver-cfg (:resolver endpoint)]
           (resolve-endpoint (registry/resolve-impl resolver-cfg
                                                    (:resolvers extensions)

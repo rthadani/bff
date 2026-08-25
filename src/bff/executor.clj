@@ -69,27 +69,31 @@
 
 (defn- execute-http-step
   "Execute one HTTP backend chain step. Returns a tagged result map.
-   Never throws — errors are captured in the result."
-  [step args chain-ctx request-ctx cache-store]
-  (let [step-id   (keyword (:id step))
-        url       (interpolate-url (:url step) args chain-ctx)
-        method    (keyword (str/lower-case (:method step "GET")))
-        params    (resolve-param-map (:input_mapping step) args chain-ctx request-ctx)
-        body      (resolve-param-map (:body_mapping step) args chain-ctx request-ctx)
-        headers   (->> (merge request-ctx (:extra_headers step {}))
-                       (remove (fn [[_ v]] (nil? v)))
-                       (into {} (map (fn [[k v]] [(name k) v]))))
-        cache-cfg (:cache step)
-        cache-key (when cache-cfg
-                    (interpolate-url (:key cache-cfg) args chain-ctx))]
+   Never throws — errors are captured in the result.
+
+   Routes through `(:http-client extensions)` when supplied, else the
+   built-in hato-based client."
+  [step args chain-ctx request-ctx extensions]
+  (let [step-id     (keyword (:id step))
+        url         (interpolate-url (:url step) args chain-ctx)
+        method      (keyword (str/lower-case (:method step "GET")))
+        params      (resolve-param-map (:input_mapping step) args chain-ctx request-ctx)
+        body        (resolve-param-map (:body_mapping step) args chain-ctx request-ctx)
+        headers     (->> (merge request-ctx (:extra_headers step {}))
+                         (remove (fn [[_ v]] (nil? v)))
+                         (into {} (map (fn [[k v]] [(name k) v]))))
+        cache-store (:cache extensions)
+        http-client (:http-client extensions)
+        cache-cfg   (:cache step)
+        cache-key   (when cache-cfg
+                      (interpolate-url (:key cache-cfg) args chain-ctx))
+        req         {:method method :url url :params params :body body
+                     :headers headers :step-id step-id}]
     (log/infof "Step [%s] → %s %s" (name step-id) (str/upper-case (name method)) url)
     (or (when cache-key (cache/lookup cache-store cache-key))
-        (let [result (http/call {:method  method
-                                 :url     url
-                                 :params  params
-                                 :body    body
-                                 :headers headers
-                                 :step-id step-id})]
+        (let [result (if http-client
+                       (http/call-via-client http-client req)
+                       (http/call req))]
           (when (and cache-key (= :ok (:status result)))
             (cache/save cache-store cache-key result (:ttl cache-cfg 60000)))
           (when (and (seq (:cache_invalidate step)) (= :ok (:status result)))
@@ -125,7 +129,7 @@
   [step args chain-ctx request-ctx extensions]
   (if (:resolver step)
     (execute-resolver-step step args chain-ctx request-ctx extensions)
-    (execute-http-step step args chain-ctx request-ctx (:cache extensions))))
+    (execute-http-step step args chain-ctx request-ctx extensions)))
 
 (defn- execute-step-with-retry
   "Run a step and, if it declares a :retry policy, re-run it up to :max more

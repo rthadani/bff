@@ -3,7 +3,8 @@
             [jsonista.core :as json]
             [clojure.string :as str])
   (:import [java.net ConnectException SocketTimeoutException]
-           [java.net.http HttpTimeoutException]))
+           [java.net.http HttpTimeoutException]
+           [io.github.rthadani.bff BffHttpClient BffHttpClient$Request]))
 
 (def ^:private default-client
   (delay
@@ -40,8 +41,10 @@
     (try (json/read-value body json/keyword-keys-object-mapper)
          (catch Exception _ body))))   ; return raw string if not JSON
 
-(defn- ->result
-  "Convert a hato response map to a tagged result."
+(defn ->result
+  "Convert a hato-shaped response map ({:status int :body string}) to a
+   tagged result. Public so callers routing HTTP through a custom
+   BffHttpClient can reuse the same status-code error mapping."
   [{:keys [status body]} step-id]
   (let [parsed (parse-body body)]
     (cond
@@ -128,6 +131,29 @@
            (str "Request to " url " timed out")
            {:step step-id :cause (.getMessage e)}))
 
+    (catch Exception e
+      (err :unexpected
+           (str "Unexpected error calling " url)
+           {:step step-id :cause (.getMessage e)}))))
+
+(defn call-via-client
+  "Route an HTTP step through a caller-supplied BffHttpClient. Converts the
+   Clojure request map into a BffHttpClient.Request, invokes send, and maps
+   the returned BffHttpClient.Response back through ->result for consistent
+   status-code error handling. Errors are captured as tagged results — this
+   never throws."
+  [^BffHttpClient client {:keys [method url params body headers step-id]
+                          :or   {method :get headers {}}}]
+  (try
+    (let [req  (BffHttpClient$Request.
+                 (str/upper-case (name method))
+                 url
+                 (or params {})
+                 body
+                 (or headers {})
+                 (some-> step-id name))
+          resp (.send client req)]
+      (->result {:status (.status resp) :body (.body resp)} step-id))
     (catch Exception e
       (err :unexpected
            (str "Unexpected error calling " url)

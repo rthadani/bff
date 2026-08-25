@@ -47,7 +47,8 @@ public final class Bff {
             Keyword.intern("resolvers"),    config.resolvers(),
             Keyword.intern("retry-hooks"),  config.retryHooks(),
             Keyword.intern("cache"),        config.cache(),
-            Keyword.intern("scalars"),      config.scalars());
+            Keyword.intern("scalars"),      config.scalars(),
+            Keyword.intern("http-client"),  config.httpClient());
     }
 
     /**

@@ -17,10 +17,10 @@
 (defn- resolve-env-vars
   [x]
   (cond
-    (string? x) (resolve-env-str x)
-    (map? x)    (update-vals x resolve-env-vars)
-    (vector? x) (mapv resolve-env-vars x)
-    :else       x))
+    (string? x)     (resolve-env-str x)
+    (map? x)        (update-vals x resolve-env-vars)
+    (sequential? x) (mapv resolve-env-vars x)
+    :else           x))
 
 (defn load-spec
   [resource-path]

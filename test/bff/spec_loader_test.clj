@@ -201,6 +201,19 @@
     (is (= ["authorization" "x-tenant-id"]
            (resolve-env-vars ["${BFF_TEST_UNSET_XYZ123:-authorization}" "x-tenant-id"])))))
 
+(deftest test-env-vars-recursive-in-list
+  (testing "substitution recurses into lists (clj-yaml returns YAML sequences as lists)"
+    (is (= ["http://localhost:3001/api" "http://localhost:3002/api"]
+           (resolve-env-vars '("${BFF_TEST_UNSET_XYZ123:-http://localhost:3001}/api"
+                               "${BFF_TEST_UNSET_XYZ123:-http://localhost:3002}/api"))))))
+
+(deftest test-env-vars-recursive-in-list-of-maps
+  (testing "substitution reaches string values inside maps that live in a list"
+    (is (= [{:url "http://localhost:3001/a"} {:url "http://localhost:3002/b"}]
+           (resolve-env-vars
+             (list {:url "${BFF_TEST_UNSET_XYZ123:-http://localhost:3001}/a"}
+                   {:url "${BFF_TEST_UNSET_XYZ123:-http://localhost:3002}/b"}))))))
+
 (deftest test-env-vars-non-string-values-unchanged
   (testing "non-string values pass through unchanged"
     (is (= {:count 42 :flag true :nothing nil}

@@ -108,7 +108,8 @@
       (is (= "PATCH" (.method req)))
       (is (= "http://x/y" (.url req)))
       (is (= {"a" "b"} (.queryParams req)))
-      (is (= {:v 1} (.body req)))
+      (is (= {"v" 1} (.body req))
+          "keyword-keyed body maps are converted to String-keyed for Java")
       (is (= {"h" "1"} (.headers req)))
       (is (= "the-step" (.stepId req))))))
 

@@ -1,7 +1,8 @@
 (ns bff.http-client
   (:require [hato.client :as hato]
             [jsonista.core :as json]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [bff.interop :as interop])
   (:import [java.net ConnectException SocketTimeoutException]
            [java.net.http HttpTimeoutException]
            [io.github.rthadani.bff BffHttpClient BffHttpClient$Request]))
@@ -179,8 +180,8 @@
     (let [jreq (BffHttpClient$Request.
                  (str/upper-case (name method))
                  url
-                 (or params {})
-                 body
+                 (interop/->java (or params {}))
+                 (interop/->java body)
                  (or headers {})
                  (some-> step-id name))
           resp (.send client jreq)]

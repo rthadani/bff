@@ -18,10 +18,13 @@
   ^JsonQuery [^String expr]
   (JsonQuery/compile expr Versions/JQ_1_6))
 
-(defn execute
-  [^JsonQuery query data]
-  (let [^JsonNode node    (.readTree mapper ^String (json/write-value-as-string data))
-        results           (ArrayList.)]
+(defn to-node
+  ^JsonNode [data]
+  (.readTree mapper ^String (json/write-value-as-string data)))
+
+(defn execute-node
+  [^JsonQuery query ^JsonNode node]
+  (let [results (ArrayList.)]
     (.apply query
             root-scope
             node
@@ -33,4 +36,8 @@
       0 nil
       1 (first results)
       (vec results))))
+
+(defn execute
+  [^JsonQuery query data]
+  (execute-node query (to-node data)))
 

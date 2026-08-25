@@ -1,15 +1,6 @@
 # Extensions
 
-Eight extension points let you plug custom logic into the request pipeline. All
-extensions are supplied to `bff.core/create-handler` (or the Java
-`Bff.createHandler` / `Bff.createServlet` overloads) via a single immutable
-config — there is no global registry and no runtime registration.
-
-Each extension follows the same pattern: a Clojure protocol with an `IFn`
-extension (so plain functions work without wrapping), a Java interface under
-`io.github.rthadani.bff.*` (so Java classes are first-class), and — for the
-three request-scoped points — a convenience base class that hides the
-boilerplate.
+Extensions are passed to `bff.core/create-handler` (or `Bff.createHandler` / `Bff.createServlet` in Java) as a config map at startup. Each extension point has a Clojure protocol and a corresponding Java interface under `io.github.rthadani.bff.*`. Some points also have a convenience base class.
 
 | Extension          | When it runs                             | Referenced in spec as                | Config key       | Java interface                                    |
 |--------------------|------------------------------------------|--------------------------------------|------------------|---------------------------------------------------|
@@ -22,18 +13,10 @@ boilerplate.
 | retry hook         | Between step attempts (when retry fires) | inside a step's `retry.before_retry` | `:retry-hooks`   | `io.github.rthadani.bff.BffRetryHook`             |
 | custom scalar      | Every input coerce / output serialize    | top-level `scalars:` block           | `:scalars`       | `io.github.rthadani.bff.BffScalar`                |
 
-Java authors have two options at every extension point that ships with a base
-class:
+For Java, each extension point that ships with a base class has two options:
 
-1. **Implement the interface directly.** Args and ctx arrive as
-   `Map<String, Object>` with String keys. Minimum ceremony; composes cleanly
-   with Spring's `@Component`.
-2. **Extend the convenience base class.** Gets you typed helpers
-   (`ResolverResult`, `StepResult`) at the cost of one extra layer of
-   inheritance.
-
-Plain Clojure functions continue to work everywhere — the Java interfaces are
-purely additive.
+1. **Implement the interface directly.** Args and ctx arrive as `Map<String, Object>`. Works well with Spring's `@Component`.
+2. **Extend the convenience base class.** Gives you typed helpers (`ResolverResult`, `StepResult`).
 
 ## The extensions map
 
@@ -67,22 +50,15 @@ BffConfig config = BffConfig.builder()
     .build();
 ```
 
-All keys are optional. The handler closes over the config once at startup —
-there is no way to add extensions after `create-handler` returns.
+All keys are optional. Extensions are fixed at startup.
 
 ---
 
 ## Context enricher
 
-Runs once at the top of every GraphQL operation, before validators and the
-backend chain. Purpose: pre-compute values into `ctx` that every downstream
-step or validator can read without repeating the lookup — the canonical case
-is fetching a customer / equipment identifier from Redis using the JWT
-subject.
+Runs once per GraphQL operation, before validators and the backend chain. Use it to pre-compute values into `ctx` that downstream steps can read, for example fetching a customer ID from Redis using the JWT subject.
 
-Enrichers run in the order they appear in `:enrichers`; each sees the ctx
-accumulated by earlier enrichers. An enricher's return value is merged into
-ctx (return `nil` to leave ctx unchanged).
+Enrichers run in the order they appear in `:enrichers`. Each one sees the ctx accumulated by earlier enrichers. Return `nil` to leave ctx unchanged.
 
 ### Protocol
 
@@ -341,9 +317,7 @@ Register on the builder: `.transformer("attach-warnings", new AttachWarningsTran
 
 ## Resolver
 
-Replaces the backend chain entirely for endpoints that don't fit the HTTP fan-out
-model — database calls, cache lookups, local computation. The resolver owns the
-full `{:data :errors}` response; no output mapping or transformer runs after it.
+Replaces the backend chain entirely. Use it for endpoints that don't fit the HTTP fan-out model, like database calls or cache lookups. No output mapping or transformer runs after it. The resolver owns the full `{:data :errors}` response.
 
 ### Protocol
 
@@ -459,10 +433,7 @@ Register on the builder: `.resolver("user-profile", new UserProfileResolver(repo
 
 ## Cache backend
 
-A single instance registered on the handler. Every backend step that declares
-`cache: {key: "..."}` in the spec routes reads and writes through the
-configured implementation. Any exception thrown by the store is logged and
-swallowed — cache failures never propagate to the GraphQL response.
+A single instance registered on the handler. Every step that declares `cache: {key: "..."}` routes reads and writes through it. Cache failures are logged and swallowed. They never propagate to the GraphQL response.
 
 ### Protocol
 
@@ -628,10 +599,7 @@ options reuses the same underlying `HttpClient`.
 
 ## Retry hook
 
-Runs between attempts of a backend step whose `retry:` config declared a
-`before_retry` reference. Purpose: rewrite the request-ctx (typically to
-inject a refreshed auth header) before the next call. If no hook is
-declared, retries reuse the current ctx unchanged.
+Runs between attempts when a step declares `before_retry`. Use it to rewrite the request context, typically to inject a refreshed auth header. If no hook is declared, retries reuse the current ctx.
 
 The step spec:
 
@@ -730,16 +698,10 @@ Register on the builder: `.retryHook("auth-token-refresh", new TokenRefreshHook(
 
 ## Custom scalar
 
-Declare a scalar type in the spec's top-level `scalars:` block, then supply a
-`{parse, serialize}` implementation in the handler config under `:scalars`.
-The engine wires them into Lacinia's `:scalars` schema section at build time
-— they are indistinguishable from Lacinia's built-in `String`/`Int`/`Float`
-scalars from a client's perspective.
+Declare a scalar type in the spec's top-level `scalars:` block, then supply a `{parse, serialize}` implementation in the handler config under `:scalars`.
 
-- **parse** — client input (usually a string from JSON) → internal value.
-  Throw on invalid input; Lacinia surfaces the exception as a coercion error.
-- **serialize** — internal value → JSON primitive
-  (`String` / `Number` / `Boolean` / `nil`).
+- **parse** — client input (usually a string from JSON) -> internal value. Throw on invalid input. Lacinia surfaces the exception as a coercion error.
+- **serialize** — internal value -> JSON primitive (`String` / `Number` / `Boolean` / `nil`).
 
 ```yaml
 scalars:

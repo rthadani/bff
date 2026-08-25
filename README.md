@@ -2,15 +2,15 @@
 
 [![Clojars Project](https://img.shields.io/clojars/v/io.github.rthadani/bff.svg)](https://clojars.org/io.github.rthadani/bff)
 
-A spec-driven GraphQL Backend-for-Frontend engine in Clojure.  
-Write a YAML spec → get a fully functional GraphQL API. No boilerplate per endpoint.
+A spec-driven GraphQL Backend-for-Frontend engine in Clojure.
+Write a YAML spec and get a fully functional GraphQL API with no boilerplate per endpoint.
 
 ## How it works
 
 Define your endpoints in a YAML spec. The engine generates a Lacinia GraphQL
 schema, fans out HTTP calls to your backend services in parallel, maps the
 responses to your output types with jq, and returns a well-formed GraphQL
-response — including partial data and structured errors when things go wrong.
+response including partial data and structured errors when things go wrong.
 
 ```
 bff-spec.yaml
@@ -53,7 +53,7 @@ Create a spec file and start the handler:
      :transformers {"attach-warnings" my-transformer-fn}
      :resolvers    {"user-profile" my-resolver-fn}
      :cache        my-cache-store}))
-;; handler is a standard Ring handler — mount it however you like
+;; handler is a standard Ring handler
 ```
 
 Or run it standalone:
@@ -77,6 +77,26 @@ curl -X POST http://localhost:8080 \
 - [Execution model](docs/execution.md) — waves, critical steps, partial failure, error codes
 - [Extensions](docs/extensions.md) — validators, transformers, resolvers, retry hooks, cache, HTTP client, in Clojure and Java
 - [Spring Boot 3](docs/spring-boot.md) — Jakarta servlet bridge and extension registration
+- [Clojure](docs/clojure.md) — Ring handler mounting and Buddy auth integration
+
+## Alternatives
+
+Several tools solve a similar problem:
+
+| Tool | Runtime | Config |
+|------|---------|--------|
+| [GraphQL Mesh](https://the-guild.dev/graphql/mesh) | Node.js | YAML |
+| [Tailcall](https://tailcall.run) | Rust | SDL |
+| [Apollo Connectors](https://www.apollographql.com/docs/graphos/connectors) | Rust (Router) | SDL directives |
+| [StepZen](https://stepzen.com) (IBM) | Cloud SaaS | YAML + SDL |
+| [Hasura](https://hasura.io) | Go | Dashboard / metadata |
+
+GraphQL Mesh is the closest in spirit. Key differences:
+
+- Embeds as a Ring handler — no separate runtime or sidecar
+- jq for all mappings: input, body, and output
+- `critical` steps with `compensation` blocks for rollback
+- REST only
 
 ## Publishing
 

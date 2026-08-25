@@ -4,7 +4,7 @@
 
 For each GraphQL request, the engine runs these steps in order:
 
-1. **Validation** — built-in arg rules, then custom validator (if declared). Fails fast; backend is never called.
+1. **Validation** — built-in arg rules, then custom validator (if declared). Fails fast. The backend is never called.
 2. **Custom resolver** — if `resolver:` is declared, it handles the request entirely and steps 3–5 are skipped.
 3. **Backend chain** — steps are grouped into waves by topological sort of their `deps` and executed.
 4. **Output mapping** — jq expressions map step results to output fields.
@@ -44,8 +44,8 @@ side effect if the chain later fails. Semantics:
 - On failure, all recorded compensations run in **reverse completion order**
   (LIFO) against the final `chain-ctx`, so a compensation can reference the
   data of the step it's undoing via `{source: step, ...}`.
-- Compensations are **best effort**. Their own errors are logged and swallowed
-  — a failed rollback never masks or replaces the original chain error.
+- Compensations are **best effort**. Their own errors are logged and swallowed.
+  A failed rollback never masks or replaces the original chain error.
 - The original critical-step exception surfaces to the caller **after** all
   compensations have run.
 

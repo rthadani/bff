@@ -1,9 +1,6 @@
 # Spring Boot 3 integration
 
-BFF ships with `io.github.rthadani.bff.Bff` — a static Java facade that
-handles Clojure loading and Jakarta servlet wiring for you. Extensions are
-supplied through an immutable `BffConfig` at startup; there is no global
-registry and no runtime registration.
+BFF ships with `io.github.rthadani.bff.Bff`, a static Java facade that handles Clojure loading and Jakarta servlet wiring. Pass a `BffConfig` at startup with all your extensions.
 
 ## Dependencies (`pom.xml`)
 
@@ -20,16 +17,11 @@ registry and no runtime registration.
 </dependency>
 ```
 
-`jakarta.servlet-api` is declared as `provided` in the BFF POM — your Spring
-Boot 3 starter already brings its own copy, so nothing more to add. Place your
-spec file in `src/main/resources/`.
+`jakarta.servlet-api` is declared as `provided` in the BFF POM. Your Spring Boot 3 starter already brings its own copy. Place your spec file in `src/main/resources/`.
 
 ## Mounting the servlet
 
-Build a `BffConfig` from your Spring beans, then hand it to
-`Bff.createServlet` behind a `ServletRegistrationBean`. All extensions are
-captured into the handler at this point — there is no register-then-create
-dance.
+Build a `BffConfig` from your Spring beans, then pass it to `Bff.createServlet` in a `ServletRegistrationBean`.
 
 ```java
 import io.github.rthadani.bff.Bff;
@@ -66,14 +58,11 @@ public class BffConfiguration {
 }
 ```
 
-For a controller-style mount instead of the servlet, use
-`Bff.createHandler(specPath, config)` and call the returned `IFn` yourself.
+For a controller-style mount instead of the servlet, use `Bff.createHandler(specPath, config)`.
 
 ## Extension implementations
 
-Extensions can implement the raw Java interfaces under
-`io.github.rthadani.bff.*` or extend the convenience base classes — pick per
-extension. See [extensions.md](extensions.md) for the full API.
+Extensions can implement the interfaces under `io.github.rthadani.bff.*` or extend the convenience base classes. See [extensions.md](extensions.md) for the full API.
 
 ```java
 import bff.executor.BaseTransformer;
@@ -184,8 +173,7 @@ public class BffExtensions {
 
 ## Security
 
-BFF has no built-in auth — it never sees JWTs and never mints tokens. Put
-Spring Security's `SecurityFilterChain` in front of the servlet path:
+BFF has no built-in auth. Put Spring Security's `SecurityFilterChain` in front of the servlet path:
 
 ```java
 @Bean

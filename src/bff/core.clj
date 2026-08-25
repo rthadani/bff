@@ -10,6 +10,17 @@
             [ring.util.response :as resp]
             [taoensso.timbre :as log]))
 
+(defn set-log-level!
+  "Set the minimum log level for BFF output. Useful for debugging — call with
+   :debug to see per-step request params, body, headers, and response data.
+   Valid levels: :trace :debug :info :warn :error :fatal"
+  [level]
+  (log/set-min-level! level))
+
+(defn- apply-env-log-level []
+  (when-let [lvl (System/getenv "BFF_LOG_LEVEL")]
+    (log/set-min-level! (keyword (clojure.string/lower-case lvl)))))
+
 (def ^:private default-forward-headers
   ["authorization" "x-request-id" "x-correlation-id"])
 
@@ -132,6 +143,7 @@
      ;; plug handler into your existing Ring/Jetty/http-kit server"
   ([spec-path] (create-handler spec-path {}))
   ([spec-path extensions]
+   (apply-env-log-level)
    (log/infof "Loading spec: %s" spec-path)
    (let [extensions      (update extensions :http-client
                                  (fn [c] (or c (http/default-client (:hato-options extensions)))))

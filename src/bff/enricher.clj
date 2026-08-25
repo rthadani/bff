@@ -13,7 +13,8 @@
 
    Enrichers are supplied to `bff.core/create-handler` as an ordered
    sequence; each sees the accumulated ctx from earlier enrichers."
-  (:require [bff.interop :as interop]))
+  (:require [bff.interop :as interop]
+            [taoensso.timbre :as log]))
 
 (defprotocol BffContextEnricher
   (enrich [this ctx]
@@ -39,6 +40,9 @@
   (reduce
     (fn [acc enricher]
       (let [added (enrich enricher acc)]
-        (if (map? added) (merge acc added) acc)))
+        (if (map? added)
+          (do (log/debugf "Enricher added keys: %s" (keys added))
+              (merge acc added))
+          acc)))
     (or ctx {})
     (or enrichers [])))

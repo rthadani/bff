@@ -2,7 +2,12 @@ package io.github.rthadani.bff;
 
 import clojure.java.api.Clojure;
 import clojure.lang.IFn;
+import clojure.lang.IPersistentMap;
 import clojure.lang.Keyword;
+import clojure.lang.PersistentHashMap;
+
+import java.util.HashMap;
+import java.util.Map;
 
 import jakarta.servlet.http.HttpServlet;
 
@@ -47,7 +52,16 @@ public final class Bff {
             Keyword.intern("resolvers"),    config.resolvers(),
             Keyword.intern("retry-hooks"),  config.retryHooks(),
             Keyword.intern("cache"),        config.cache(),
-            Keyword.intern("scalars"),      config.scalars());
+            Keyword.intern("scalars"),      config.scalars(),
+            Keyword.intern("http-client"),  config.httpClient(),
+            Keyword.intern("hato-options"), toKeywordMap(config.hatoOptions()));
+    }
+
+    private static IPersistentMap toKeywordMap(Map<String, Object> in) {
+        if (in == null || in.isEmpty()) return PersistentHashMap.EMPTY;
+        Map<Keyword, Object> tmp = new HashMap<>(in.size());
+        in.forEach((k, v) -> tmp.put(Keyword.intern(k), v));
+        return PersistentHashMap.create(tmp);
     }
 
     /**

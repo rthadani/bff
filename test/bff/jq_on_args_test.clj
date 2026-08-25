@@ -22,7 +22,7 @@
                     :body_mapping
                     {:fromTime (with-jq {:source "args" :key "days"}
                                         "now - . * 86400 | floor")})]
-    (with-redefs [http/call (fn [{:keys [body]}]
+    (with-redefs [http/call (fn [_ {:keys [body]}]
                               (reset! captured body)
                               (http/ok {}))]
       (run-sync! (executor/execute-graph [step] {:days 5} {} {}))
@@ -34,7 +34,7 @@
         step (assoc base-step
                     :body_mapping
                     {:days {:source "args" :key "days"}})]
-    (with-redefs [http/call (fn [{:keys [body]}]
+    (with-redefs [http/call (fn [_ {:keys [body]}]
                               (reset! captured body)
                               (http/ok {}))]
       (run-sync! (executor/execute-graph [step] {:days 5} {} {}))
@@ -46,7 +46,7 @@
                     :body_mapping
                     {:tenant (with-jq {:source "ctx" :key "authorization"}
                                       ". | split(\" \") | .[1]")})]
-    (with-redefs [http/call (fn [{:keys [body]}]
+    (with-redefs [http/call (fn [_ {:keys [body]}]
                               (reset! captured body)
                               (http/ok {}))]
       (run-sync! (executor/execute-graph [step] {} {:authorization "Bearer abc123"} {}))
@@ -58,7 +58,7 @@
           step (assoc base-step
                       :body_mapping
                       {:x (with-jq {:source "args" :key "missing"} ". // \"default\"")})]
-      (with-redefs [http/call (fn [{:keys [body]}]
+      (with-redefs [http/call (fn [_ {:keys [body]}]
                                 (reset! captured body)
                                 (http/ok {}))]
         (run-sync! (executor/execute-graph [step] {} {} {}))
@@ -70,7 +70,7 @@
           step (assoc base-step
                       :body_mapping
                       {:sku (with-jq {:source "args" :key "order"} ".sku")})]
-      (with-redefs [http/call (fn [{:keys [body]}]
+      (with-redefs [http/call (fn [_ {:keys [body]}]
                                 (reset! captured body)
                                 (http/ok {}))]
         (run-sync! (executor/execute-graph

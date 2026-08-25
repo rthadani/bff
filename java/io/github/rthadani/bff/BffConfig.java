@@ -36,7 +36,7 @@ import java.util.Map;
 public final class BffConfig {
 
     static final BffConfig EMPTY = new BffConfig(
-        List.of(), Map.of(), Map.of(), Map.of(), Map.of(), null, Map.of());
+        List.of(), Map.of(), Map.of(), Map.of(), Map.of(), null, Map.of(), null, Map.of());
 
     private final List<BffContextEnricher>    enrichers;
     private final Map<String, BffValidator>   validators;
@@ -45,6 +45,8 @@ public final class BffConfig {
     private final Map<String, BffRetryHook>   retryHooks;
     private final CacheStore                  cache;
     private final Map<String, BffScalar>      scalars;
+    private final BffHttpClient               httpClient;
+    private final Map<String, Object>         hatoOptions;
 
     private BffConfig(List<BffContextEnricher>    enrichers,
                       Map<String, BffValidator>   validators,
@@ -52,7 +54,9 @@ public final class BffConfig {
                       Map<String, BffResolver>    resolvers,
                       Map<String, BffRetryHook>   retryHooks,
                       CacheStore                  cache,
-                      Map<String, BffScalar>      scalars) {
+                      Map<String, BffScalar>      scalars,
+                      BffHttpClient               httpClient,
+                      Map<String, Object>         hatoOptions) {
         this.enrichers    = enrichers;
         this.validators   = validators;
         this.transformers = transformers;
@@ -60,6 +64,8 @@ public final class BffConfig {
         this.retryHooks   = retryHooks;
         this.cache        = cache;
         this.scalars      = scalars;
+        this.httpClient   = httpClient;
+        this.hatoOptions  = hatoOptions;
     }
 
     public List<BffContextEnricher>    enrichers()    { return enrichers; }
@@ -69,6 +75,8 @@ public final class BffConfig {
     public Map<String, BffRetryHook>   retryHooks()   { return retryHooks; }
     public CacheStore                  cache()        { return cache; }
     public Map<String, BffScalar>      scalars()      { return scalars; }
+    public BffHttpClient               httpClient()   { return httpClient; }
+    public Map<String, Object>         hatoOptions()  { return hatoOptions; }
 
     public static Builder builder() { return new Builder(); }
 
@@ -80,6 +88,8 @@ public final class BffConfig {
         private final Map<String, BffRetryHook>   retryHooks   = new LinkedHashMap<>();
         private final Map<String, BffScalar>      scalars      = new LinkedHashMap<>();
         private CacheStore                        cache;
+        private BffHttpClient                     httpClient;
+        private Map<String, Object>               hatoOptions  = Map.of();
 
         private Builder() {}
 
@@ -126,6 +136,24 @@ public final class BffConfig {
             return this;
         }
 
+        /** Route outbound HTTP for spec {@code url:} steps through this client
+         *  instead of the built-in hato-based one. Pass {@code null} to revert
+         *  to the default. */
+        public Builder httpClient(BffHttpClient client) {
+            this.httpClient = client;
+            return this;
+        }
+
+        /** Extra options merged into the built-in hato client's construction
+         *  (e.g. {@code "ssl-context"}, {@code "connect-timeout"}). Keys are
+         *  hato/{@code build-http-client} option names as strings; they are
+         *  converted to Clojure keywords internally. Ignored when
+         *  {@link #httpClient(BffHttpClient)} is set. */
+        public Builder hatoOptions(Map<String, Object> options) {
+            this.hatoOptions = options == null ? Map.of() : Map.copyOf(options);
+            return this;
+        }
+
         public BffConfig build() {
             return new BffConfig(
                 List.copyOf(enrichers),
@@ -134,7 +162,9 @@ public final class BffConfig {
                 unmodifiable(resolvers),
                 unmodifiable(retryHooks),
                 cache,
-                unmodifiable(scalars));
+                unmodifiable(scalars),
+                httpClient,
+                hatoOptions);
         }
 
         private static <K, V> Map<K, V> unmodifiable(Map<K, V> m) {

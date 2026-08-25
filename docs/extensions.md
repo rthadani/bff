@@ -9,6 +9,7 @@ Extensions are passed to `bff.core/create-handler` (or `Bff.createHandler` / `Bf
 | `transformer`      | After output mapping                     | `transformer:`                       | `:transformers`  | `io.github.rthadani.bff.BffTransformer`           |
 | `resolver`         | Instead of the backend chain             | `resolver:`                          | `:resolvers`     | `io.github.rthadani.bff.BffResolver`              |
 | cache backend      | Around every cacheable step              | (single instance)                    | `:cache`         | `io.github.rthadani.bff.CacheStore`               |
+| HTTP client        | Every spec `url:` step                   | (single instance)                    | `:http-client`   | `io.github.rthadani.bff.BffHttpClient`            |
 | retry hook         | Between step attempts (when retry fires) | inside a step's `retry.before_retry` | `:retry-hooks`   | `io.github.rthadani.bff.BffRetryHook`             |
 | custom scalar      | Every input coerce / output serialize    | top-level `scalars:` block           | `:scalars`       | `io.github.rthadani.bff.BffScalar`                |
 
@@ -30,7 +31,8 @@ extensions config. In Clojure it is a plain map:
    :transformers {"attach-warnings"   warnings-transformer}
    :resolvers    {"user-profile"      user-profile-resolver}
    :retry-hooks  {"auth-token-refresh" token-refresh-hook}
-   :cache         redis-cache-store})
+   :cache         redis-cache-store
+   :http-client   my-http-client})
 ```
 
 In Java, use the `BffConfig.Builder`:
@@ -44,6 +46,7 @@ BffConfig config = BffConfig.builder()
     .resolver("user-profile",       userProfileResolver)
     .retryHook("auth-token-refresh", tokenRefreshHook)
     .cache(redisCacheStore)
+    .httpClient(myHttpClient)
     .build();
 ```
 
@@ -482,6 +485,115 @@ public class RedisCacheStore implements CacheStore {
 ```
 
 Register on the builder: `.cache(new RedisCacheStore(redis))`.
+
+---
+
+## HTTP client
+
+A single instance registered on the handler. Every spec step with a `url:`
+field routes through it. Omit it and BFF uses a built-in hato client.
+
+Given a `Request` (method, url, params, body, headers, step id), return a
+`Response` with the raw status and body. BFF maps status codes to its error
+codes (401 → `:unauthorized`, and so on), so return the real status even
+for non-2xx responses. Exceptions are caught and turned into `:unexpected`.
+
+### Clojure
+
+Any 1-arity fn. Return `{:status int :body str}` and BFF maps status codes
+for you. Or return a tagged `{:status :ok :data ...}` / `{:status :error
+:error ...}` map and it's passed through as-is.
+
+```clojure
+(require '[hato.client :as hato])
+
+(defn my-http-client
+  [{:keys [method url params body headers]}]
+  (let [resp (hato/request {:method            method
+                            :url               url
+                            :query-params      params
+                            :form-params       body
+                            :headers           headers
+                            :as                :string
+                            :throw-exceptions? false})]
+    {:status (:status resp) :body (:body resp)}))
+
+(bff/create-handler "spec.yaml" {:http-client my-http-client})
+```
+
+### Java — interface
+
+```java
+import io.github.rthadani.bff.BffHttpClient;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.HttpStatusCodeException;
+
+public class SpringRestBffClient implements BffHttpClient {
+
+    private final MyRestClient rest;
+
+    public SpringRestBffClient(MyRestClient rest) { this.rest = rest; }
+
+    @Override
+    public Response send(Request req) {
+        HttpHeaders headers = new HttpHeaders();
+        req.headers.forEach(headers::add);
+        try {
+            ResponseEntity<String> resp = switch (req.method) {
+                case "GET"    -> rest.get(req.url, headers, req.queryParams);
+                case "POST"   -> rest.post(req.url, headers, req.body, req.queryParams);
+                case "PUT"    -> rest.put(req.url, headers, req.body, req.queryParams);
+                case "PATCH"  -> rest.patch(req.url, headers, req.body, req.queryParams);
+                case "DELETE" -> rest.delete(req.url, headers, req.body, req.queryParams);
+                default -> throw new IllegalArgumentException("Unsupported: " + req.method);
+            };
+            return new Response(resp.getStatusCode().value(), resp.getBody());
+        } catch (HttpStatusCodeException ex) {
+            return new Response(ex.getStatusCode().value(), ex.getResponseBodyAsString());
+        }
+    }
+}
+```
+
+Register on the builder: `.httpClient(new SpringRestBffClient(myRest))`.
+
+Retries, cache reads/writes, and compensations all go through the injected
+client — no bypass path in the executor.
+
+### Configuring the built-in hato client
+
+For the common case — keep the built-in client, just tweak it (SSL context,
+timeouts) — use `hatoOptions` instead of implementing `BffHttpClient`. Keys
+are hato `build-http-client` option names; they are converted to keywords
+internally. Ignored when a custom `httpClient` is set.
+
+```java
+KeyStore ts = KeyStore.getInstance("JKS");
+try (FileInputStream in = new FileInputStream("/path/to/portal-trust.jks")) {
+    ts.load(in, "changeit".toCharArray());
+}
+TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+tmf.init(ts);
+SSLContext ctx = SSLContext.getInstance("TLS");
+ctx.init(null, tmf.getTrustManagers(), null);
+
+BffConfig config = BffConfig.builder()
+    .hatoOptions(Map.of(
+        "ssl-context",     ctx,
+        "connect-timeout", 10_000L))
+    .build();
+```
+
+Clojure equivalent:
+
+```clojure
+(bff/create-handler "spec.yaml"
+  {:hato-options {:ssl-context ctx :connect-timeout 10000}})
+```
+
+Clients are cached per options map, so calling handlers built with the same
+options reuses the same underlying `HttpClient`.
 
 ---
 

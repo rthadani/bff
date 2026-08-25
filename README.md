@@ -75,7 +75,7 @@ curl -X POST http://localhost:8080 \
 
 - [Spec reference](docs/spec.md) — YAML format, all fields, env var substitution, jq, caching
 - [Execution model](docs/execution.md) — waves, critical steps, partial failure, error codes
-- [Extensions](docs/extensions.md) — validators, transformers, and resolvers in Clojure and Java
+- [Extensions](docs/extensions.md) — validators, transformers, resolvers, retry hooks, cache, HTTP client, in Clojure and Java
 - [Spring Boot 3](docs/spring-boot.md) — Jakarta servlet bridge and extension registration
 - [Clojure](docs/clojure.md) — Ring handler mounting and Buddy auth integration
 

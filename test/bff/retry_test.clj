@@ -49,14 +49,14 @@
 
 (deftest test-step-with-no-retry-config-called-once
   (let [calls (atom 0)]
-    (with-redefs [http/call (fn [_] (swap! calls inc) (http/err :timeout "t"))]
+    (with-redefs [http/call (fn [_ _] (swap! calls inc) (http/err :timeout "t"))]
       (run-sync! (executor/execute-graph [base-step] {} {} {}))
       (is (= 1 @calls)))))
 
 (deftest test-step-retries-on-matching-code-and-recovers
   (let [calls    (atom 0)
         step     (assoc base-step :retry {:max 2 :on_code [:unauthorized]})]
-    (with-redefs [http/call (fn [_]
+    (with-redefs [http/call (fn [_ _]
                               (swap! calls inc)
                               (if (= 1 @calls)
                                 (http/err :unauthorized "401")
@@ -68,7 +68,7 @@
 (deftest test-step-stops-after-max-retries
   (let [calls (atom 0)
         step  (assoc base-step :retry {:max 2 :on_code [:unauthorized]})]
-    (with-redefs [http/call (fn [_]
+    (with-redefs [http/call (fn [_ _]
                               (swap! calls inc)
                               (http/err :unauthorized "401"))]
       (let [ctx (run-sync! (executor/execute-graph [step] {} {} {}))]
@@ -78,7 +78,7 @@
 (deftest test-step-does-not-retry-on-different-code
   (let [calls (atom 0)
         step  (assoc base-step :retry {:max 2 :on_code [:unauthorized]})]
-    (with-redefs [http/call (fn [_]
+    (with-redefs [http/call (fn [_ _]
                               (swap! calls inc)
                               (http/err :not-found "404"))]
       (run-sync! (executor/execute-graph [step] {} {} {}))
@@ -94,7 +94,7 @@
                     :retry {:max 1 :on_code [:unauthorized]
                             :before_retry {:key "capture-hook"}})
         exts {:retry-hooks {"capture-hook" (fn [ctx] (reset! seen ctx) nil)}}]
-    (with-redefs [http/call (fn [_] (http/err :unauthorized "401"))]
+    (with-redefs [http/call (fn [_ _] (http/err :unauthorized "401"))]
       (run-sync! (executor/execute-graph
                    [step] {:userId "u1"} {:authorization "old"} exts))
       (is (= :s      (:step-id     @seen)))
@@ -111,7 +111,7 @@
         exts {:retry-hooks
               {"refresh-hook" (fn [ctx]
                                 (assoc (:request-ctx ctx) :authorization "Bearer fresh"))}}]
-    (with-redefs [http/call (fn [{:keys [headers]}]
+    (with-redefs [http/call (fn [_ {:keys [headers]}]
                               (swap! seen-headers conj (get headers "authorization"))
                               (http/err :unauthorized "401"))]
       (run-sync! (executor/execute-graph
@@ -124,7 +124,7 @@
                     :retry {:max 1 :on_code [:unauthorized]
                             :before_retry {:key "noop-hook"}})
         exts {:retry-hooks {"noop-hook" (fn [_] nil)}}]
-    (with-redefs [http/call (fn [{:keys [headers]}]
+    (with-redefs [http/call (fn [_ {:keys [headers]}]
                               (swap! seen-headers conj (get headers "authorization"))
                               (http/err :unauthorized "401"))]
       (run-sync! (executor/execute-graph
@@ -135,7 +135,7 @@
   (let [step (assoc base-step
                     :retry {:max 1 :on_code [:unauthorized]
                             :before_retry {:key "does-not-exist"}})]
-    (with-redefs [http/call (fn [_] (http/err :unauthorized "401"))]
+    (with-redefs [http/call (fn [_ _] (http/err :unauthorized "401"))]
       (is (thrown? clojure.lang.ExceptionInfo
                    (run-sync! (executor/execute-graph [step] {} {} {})))))))
 
@@ -144,7 +144,7 @@
                     :retry {:max 1 :on_code [:unauthorized]
                             :before_retry {:ns "bff.retry-test"
                                            :fn "sample-hook"}})]
-    (with-redefs [http/call (fn [_] (http/err :unauthorized "401"))]
+    (with-redefs [http/call (fn [_ _] (http/err :unauthorized "401"))]
       (run-sync! (executor/execute-graph
                    [step] {} {:authorization "old"} {})))))
 

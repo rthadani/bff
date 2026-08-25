@@ -75,7 +75,7 @@
 
 (deftest test-enricher-values-visible-to-validator
   (let [seen (atom nil)]
-    (with-redefs [http/call (fn [_] (http/ok {}))]
+    (with-redefs [http/call (fn [_ _] (http/ok {}))]
       (run-sync!
         (executor/run-endpoint
           (assoc base-endpoint :validator {:key "capture-ctx"})
@@ -87,7 +87,7 @@
 
 (deftest test-enricher-values-forwarded-to-backend-step-headers
   (let [seen-headers (atom nil)]
-    (with-redefs [http/call (fn [{:keys [headers]}]
+    (with-redefs [http/call (fn [_ {:keys [headers]}]
                               (reset! seen-headers headers)
                               (http/ok {}))]
       (run-sync!
@@ -98,7 +98,7 @@
     (is (= "tok"     (get @seen-headers "authorization")))))
 
 (deftest test-enricher-values-visible-via-ctx-source-mapping
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (let [endpoint (assoc base-endpoint
                           :output_mapping {:cid {:source "ctx" :key "customerId"}})
           {:keys [data]} (run-sync!

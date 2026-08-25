@@ -20,7 +20,7 @@
 
 (deftest test-compensations-not-run-when-chain-succeeds
   (let [calls (atom [])]
-    (with-redefs [http/call (fn [{:keys [url]}]
+    (with-redefs [http/call (fn [_ {:keys [url]}]
                               (swap! calls conj url)
                               (http/ok {}))]
       (run-sync!
@@ -38,7 +38,7 @@
 
 (deftest test-compensation-runs-when-later-critical-step-fails
   (let [calls (atom [])]
-    (with-redefs [http/call (fn [{:keys [url method]}]
+    (with-redefs [http/call (fn [_ {:keys [url method]}]
                               (swap! calls conj [(name method) url])
                               (if (= "http://b" url)
                                 (http/err :backend-error "500")
@@ -56,7 +56,7 @@
 
 (deftest test-compensations-run-in-reverse-order
   (let [calls (atom [])]
-    (with-redefs [http/call (fn [{:keys [url method]}]
+    (with-redefs [http/call (fn [_ {:keys [url method]}]
                               (swap! calls conj [(name method) url])
                               (if (= "http://d" url)
                                 (http/err :backend-error "500")
@@ -83,7 +83,7 @@
 
 (deftest test-failed-step-has-no-compensation-recorded
   (let [calls (atom [])]
-    (with-redefs [http/call (fn [{:keys [url method]}]
+    (with-redefs [http/call (fn [_ {:keys [url method]}]
                               (swap! calls conj [(name method) url])
                               (if (= "http://b" url)
                                 (http/err :backend-error "500")
@@ -107,7 +107,7 @@
 
 (deftest test-compensation-failure-is-logged-not-thrown
   (let [calls (atom [])]
-    (with-redefs [http/call (fn [{:keys [url method]}]
+    (with-redefs [http/call (fn [_ {:keys [url method]}]
                               (swap! calls conj [(name method) url])
                               (cond
                                 (= url "http://b")       (http/err :backend-error "500")
@@ -129,7 +129,7 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest test-original-critical-failure-still-thrown-after-compensations
-  (with-redefs [http/call (fn [{:keys [url]}]
+  (with-redefs [http/call (fn [_ {:keys [url]}]
                             (if (= "http://b" url)
                               (http/err :backend-error "500")
                               (http/ok {})))]
@@ -147,7 +147,7 @@
 
 (deftest test-compensation-can-reference-step-data-via-input-mapping
   (let [captured-params (atom nil)]
-    (with-redefs [http/call (fn [{:keys [url params]}]
+    (with-redefs [http/call (fn [_ {:keys [url params]}]
                               (cond
                                 (= url "http://create") (http/ok {:id "cust-123"})
                                 (= url "http://b")      (http/err :backend-error "500")
@@ -173,7 +173,7 @@
 
 (deftest test-parallel-siblings-successful-one-compensates
   (let [calls (atom [])]
-    (with-redefs [http/call (fn [{:keys [url method]}]
+    (with-redefs [http/call (fn [_ {:keys [url method]}]
                               (swap! calls conj [(name method) url])
                               (if (= "http://sibling-fail" url)
                                 (http/err :backend-error "500")

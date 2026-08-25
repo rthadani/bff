@@ -6,21 +6,48 @@
            [java.net.http HttpTimeoutException]
            [io.github.rthadani.bff BffHttpClient BffHttpClient$Request]))
 
-(def ^:private default-client
-  (delay
-    (hato/build-http-client
-     {:connect-timeout 5000
-      :redirect-policy :always
-      :version :http-2})))
+(declare ->result)
+
+(defprotocol BffHttp
+  "A single-request HTTP transport. Extended below to plain fns (the natural
+   Clojure implementation), the Java BffHttpClient interface, and BFF's own
+   hato-backed default. Implementations return either a raw
+   {:status int :body str} that BFF maps through `->result`, or a fully tagged
+   {:status :ok/:error ...} map that is passed through untouched."
+  (do-call [this req]))
+
+(def ^:private base-client-opts
+  {:connect-timeout 5000
+   :redirect-policy :always
+   :version         :http-2})
+
+(def ^:private client-cache (atom {}))
+
+(defn- client-for [opts]
+  (if (empty? opts)
+    (or (get @client-cache ::default)
+        (get (swap! client-cache
+                    #(if (contains? % ::default)
+                       %
+                       (assoc % ::default (hato/build-http-client base-client-opts))))
+             ::default))
+    (or (get @client-cache opts)
+        (get (swap! client-cache
+                    (fn [m]
+                      (if (contains? m opts)
+                        m
+                        (assoc m opts (hato/build-http-client
+                                        (merge base-client-opts opts))))))
+             opts))))
 
 (def ^:private default-opts
   {:as                :string
    :content-type      :json
    :accept            :json
-   :throw-exceptions? false   ; we handle errors ourselves
+   :throw-exceptions? false
    :timeout           30000})
 
-(defn ok [data]    {:status :ok    :data  data})
+(defn ok [data] {:status :ok :data data})
 (defn err
   "Build a tagged error result. Optional `detail` (map) attaches free-form
    context; optional `http-status` (int) records the upstream HTTP status
@@ -39,12 +66,12 @@
 (defn- parse-body [body]
   (when (and body (not (str/blank? body)))
     (try (json/read-value body json/keyword-keys-object-mapper)
-         (catch Exception _ body))))   ; return raw string if not JSON
+         (catch Exception _ body))))
 
 (defn ->result
-  "Convert a hato-shaped response map ({:status int :body string}) to a
-   tagged result. Public so callers routing HTTP through a custom
-   BffHttpClient can reuse the same status-code error mapping."
+  "Map a raw HTTP response ({:status int :body string}) to a tagged result.
+   Public so implementations of `BffHttp` can reuse the same status-code
+   error mapping."
   [{:keys [status body]} step-id]
   (let [parsed (parse-body body)]
     (cond
@@ -96,64 +123,76 @@
            {:step step-id :body parsed}
            status))))
 
+(defrecord HatoClient [hato-opts]
+  BffHttp
+  (do-call [_ {:keys [method url params body headers step-id]
+               :or   {method :get headers {}}}]
+    (try
+      (let [req  (cond-> (merge default-opts
+                                {:http-client (client-for hato-opts)
+                                 :headers     headers})
+                   (seq params) (assoc :query-params params)
+                   (seq body)   (assoc :form-params body))
+            resp (case method
+                   :get    (hato/get    url req)
+                   :post   (hato/post   url req)
+                   :put    (hato/put    url req)
+                   :patch  (hato/patch  url req)
+                   :delete (hato/delete url req)
+                   (throw (ex-info (str "Unsupported HTTP method: " method)
+                                   {:method method})))]
+        (->result resp step-id))
+      (catch ConnectException e
+        (err :connection-refused
+             (str "Could not connect to " url)
+             {:step step-id :cause (.getMessage e)}))
+      (catch SocketTimeoutException e
+        (err :timeout
+             (str "Request to " url " timed out")
+             {:step step-id :cause (.getMessage e)}))
+      (catch HttpTimeoutException e
+        (err :timeout
+             (str "Request to " url " timed out")
+             {:step step-id :cause (.getMessage e)}))
+      (catch Exception e
+        (err :unexpected
+             (str "Unexpected error calling " url)
+             {:step step-id :cause (.getMessage e)})))))
 
-(defn call
-  [{:keys [method url params body headers step-id]
-    :or   {method :get headers {}}}]
-  (try
-    (let [req  (cond-> (merge default-opts
-                              {:http-client @default-client
-                               :headers     headers})
-                 (seq params) (assoc :query-params params)
-                 (seq body)   (assoc :form-params body))
-          resp (case method
-                 :get    (hato/get    url req)
-                 :post   (hato/post   url req)
-                 :put    (hato/put    url req)
-                 :patch  (hato/patch  url req)
-                 :delete (hato/delete url req)
-                 (throw (ex-info (str "Unsupported HTTP method: " method)
-                                 {:method method})))]
-      (->result resp step-id))
+(defn default-client
+  "The built-in hato-backed BffHttp implementation. `hato-opts` is merged into
+   hato's `build-http-client` options; pass nil for the shared defaults."
+  ([]         (default-client nil))
+  ([hato-opts] (->HatoClient (or hato-opts {}))))
 
-    (catch ConnectException e
-      (err :connection-refused
-           (str "Could not connect to " url)
-           {:step step-id :cause (.getMessage e)}))
+(extend-protocol BffHttp
+  clojure.lang.IFn
+  (do-call [f {:keys [step-id] :as req}]
+    (let [resp (f req)]
+      (if (#{:ok :error} (:status resp))
+        resp
+        (->result {:status (:status resp) :body (:body resp)} step-id))))
 
-    (catch SocketTimeoutException e
-      (err :timeout
-           (str "Request to " url " timed out")
-           {:step step-id :cause (.getMessage e)}))
-
-    (catch HttpTimeoutException e
-      (err :timeout
-           (str "Request to " url " timed out")
-           {:step step-id :cause (.getMessage e)}))
-
-    (catch Exception e
-      (err :unexpected
-           (str "Unexpected error calling " url)
-           {:step step-id :cause (.getMessage e)}))))
-
-(defn call-via-client
-  "Route an HTTP step through a caller-supplied BffHttpClient. Converts the
-   Clojure request map into a BffHttpClient.Request, invokes send, and maps
-   the returned BffHttpClient.Response back through ->result for consistent
-   status-code error handling. Errors are captured as tagged results — this
-   never throws."
-  [^BffHttpClient client {:keys [method url params body headers step-id]
-                          :or   {method :get headers {}}}]
-  (try
-    (let [req  (BffHttpClient$Request.
+  BffHttpClient
+  (do-call [client {:keys [method url params body headers step-id]
+                    :or   {method :get headers {}}}]
+    (let [jreq (BffHttpClient$Request.
                  (str/upper-case (name method))
                  url
                  (or params {})
                  body
                  (or headers {})
                  (some-> step-id name))
-          resp (.send client req)]
-      (->result {:status (.status resp) :body (.body resp)} step-id))
+          resp (.send client jreq)]
+      (->result {:status (.status resp) :body (.body resp)} step-id))))
+
+(defn call
+  "Route an HTTP step through `client` (any BffHttp — hato default, plain fn,
+   or Java BffHttpClient). Errors are captured as tagged results — this never
+   throws."
+  [client {:keys [url step-id] :as req}]
+  (try
+    (do-call client req)
     (catch Exception e
       (err :unexpected
            (str "Unexpected error calling " url)

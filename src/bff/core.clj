@@ -2,6 +2,7 @@
   (:require [bff.spec-loader :as loader]
             [bff.schema-builder :as schema-builder]
             [bff.sdl :as sdl]
+            [bff.http-client :as http]
             [com.walmartlabs.lacinia :as lacinia]
             [com.walmartlabs.lacinia.schema :as lacinia-schema]
             [ring.middleware.json :refer [wrap-json-body wrap-json-response]]
@@ -132,7 +133,9 @@
   ([spec-path] (create-handler spec-path {}))
   ([spec-path extensions]
    (log/infof "Loading spec: %s" spec-path)
-   (let [spec            (loader/load-and-compile spec-path)
+   (let [extensions      (update extensions :http-client
+                                 (fn [c] (or c (http/default-client (:hato-options extensions)))))
+         spec            (loader/load-and-compile spec-path)
          schema-map      (schema-builder/build-schema-map spec extensions)
          schema          (lacinia-schema/compile schema-map)
          sdl-text        (sdl/emit-sdl schema-map)

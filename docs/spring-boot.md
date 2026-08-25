@@ -50,7 +50,8 @@ public class BffConfiguration {
             .transformer("attach-warnings",   ext.warningsTransformer())
             .resolver   ("user-profile",      ext.userProfileResolver())
             .retryHook  ("auth-token-refresh", ext.tokenRefreshHook())
-            .cache(ext.redisCacheStore())
+            .cache      (ext.redisCacheStore())
+            .httpClient (ext.springHttpAdapter())
             .build();
     }
 

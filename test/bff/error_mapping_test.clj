@@ -30,32 +30,32 @@
 
 (deftest test-step-errors-mapping-by-http-status
   (let [step (assoc base-step :errors {400 "DUPLICATE_CUSTOMER"})]
-    (with-redefs [http/call (fn [_] (http/err :bad-request "400" {} 400))]
+    (with-redefs [http/call (fn [_ _] (http/err :bad-request "400" {} 400))]
       (let [{:keys [errors]} (run (assoc base-endpoint :backend_chain [step]))]
         (is (= "DUPLICATE_CUSTOMER" (get-in (first errors) [:extensions :code])))))))
 
 (deftest test-step-errors-mapping-by-semantic-code
   (let [step (assoc base-step :errors {:unauthorized "TOKEN_EXPIRED"})]
-    (with-redefs [http/call (fn [_] (http/err :unauthorized "401" {} 401))]
+    (with-redefs [http/call (fn [_ _] (http/err :unauthorized "401" {} 401))]
       (let [{:keys [errors]} (run (assoc base-endpoint :backend_chain [step]))]
         (is (= "TOKEN_EXPIRED" (get-in (first errors) [:extensions :code])))))))
 
 (deftest test-step-errors-mapping-by-string-code
   (testing "YAML-loaded specs may present keys as strings"
     (let [step (assoc base-step :errors {"unauthorized" "TOKEN_EXPIRED"})]
-      (with-redefs [http/call (fn [_] (http/err :unauthorized "401" {} 401))]
+      (with-redefs [http/call (fn [_ _] (http/err :unauthorized "401" {} 401))]
         (let [{:keys [errors]} (run (assoc base-endpoint :backend_chain [step]))]
           (is (= "TOKEN_EXPIRED" (get-in (first errors) [:extensions :code]))))))))
 
 (deftest test-step-errors-mapping-http-status-takes-priority
   (let [step (assoc base-step :errors {401 "BY_STATUS"
                                        :unauthorized "BY_CODE"})]
-    (with-redefs [http/call (fn [_] (http/err :unauthorized "401" {} 401))]
+    (with-redefs [http/call (fn [_ _] (http/err :unauthorized "401" {} 401))]
       (let [{:keys [errors]} (run (assoc base-endpoint :backend_chain [step]))]
         (is (= "BY_STATUS" (get-in (first errors) [:extensions :code])))))))
 
 (deftest test-no-errors-mapping-preserves-semantic-code
-  (with-redefs [http/call (fn [_] (http/err :unauthorized "401" {} 401))]
+  (with-redefs [http/call (fn [_ _] (http/err :unauthorized "401" {} 401))]
     (let [{:keys [errors]} (run base-endpoint)]
       (is (= :unauthorized (get-in (first errors) [:extensions :code]))))))
 
@@ -65,7 +65,7 @@
           step  (-> base-step
                     (assoc :retry {:max 1 :on_code [:unauthorized]}
                            :errors {:unauthorized "TOKEN_EXPIRED"}))]
-      (with-redefs [http/call (fn [_]
+      (with-redefs [http/call (fn [_ _]
                                 (swap! calls inc)
                                 (http/err :unauthorized "401" {} 401))]
         (let [{:keys [errors]} (run (assoc base-endpoint :backend_chain [step]))]

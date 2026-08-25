@@ -69,10 +69,10 @@
 
 (defn- execute-http-step
   "Execute one HTTP backend chain step. Returns a tagged result map.
-   Never throws — errors are captured in the result.
-
-   Routes through `(:http-client extensions)` when supplied, else the
-   built-in hato-based client."
+   Never throws — errors are captured in the result. Uses whatever
+   `(:http-client extensions)` resolves to — `bff.core/create-handler`
+   defaults it to a hato-backed client built from `(:hato-options extensions)`
+   when the caller doesn't supply one."
   [step args chain-ctx request-ctx extensions]
   (let [step-id     (keyword (:id step))
         url         (interpolate-url (:url step) args chain-ctx)
@@ -91,9 +91,7 @@
                      :headers headers :step-id step-id}]
     (log/infof "Step [%s] → %s %s" (name step-id) (str/upper-case (name method)) url)
     (or (when cache-key (cache/lookup cache-store cache-key))
-        (let [result (if http-client
-                       (http/call-via-client http-client req)
-                       (http/call req))]
+        (let [result (http/call http-client req)]
           (when (and cache-key (= :ok (:status result)))
             (cache/save cache-store cache-key result (:ttl cache-cfg 60000)))
           (when (and (seq (:cache_invalidate step)) (= :ok (:status result)))

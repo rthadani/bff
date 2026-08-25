@@ -206,7 +206,7 @@
 
 (deftest test-validation-failure-short-circuits-backend-chain
   (let [called (atom false)]
-    (with-redefs [http/call (fn [_] (reset! called true) (http/ok {}))]
+    (with-redefs [http/call (fn [_ _] (reset! called true) (http/ok {}))]
       (let [endpoint (assoc-in base-endpoint [:args :id :validate]
                                {:pattern "^[a-z]+$" :message "letters only"})
             {:keys [data errors]} (run-sync!
@@ -218,7 +218,7 @@
 
 (deftest test-validation-success-proceeds-to-chain
   (let [called (atom false)]
-    (with-redefs [http/call (fn [_] (reset! called true) (http/ok {}))]
+    (with-redefs [http/call (fn [_ _] (reset! called true) (http/ok {}))]
       (let [endpoint (assoc-in base-endpoint [:args :id :validate]
                                {:pattern "^[a-z]+$"})
             {:keys [errors]} (run-sync!

@@ -35,13 +35,13 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest test-execute-graph-single-step-result-in-ctx
-  (with-redefs [http/call (fn [_] (http/ok {:id 1}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {:id 1}))]
     (let [ctx (graph [(assoc base-step :id "a")] {} {})]
       (is (= :ok (get-in ctx [:a :status])))
       (is (= {:id 1} (get-in ctx [:a :data]))))))
 
 (deftest test-execute-graph-parallel-steps-both-in-ctx
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (let [chain [(assoc base-step :id "a")
                  (assoc base-step :id "b")]
           ctx   (graph chain {} {})]
@@ -49,7 +49,7 @@
       (is (contains? ctx :b)))))
 
 (deftest test-execute-graph-sequential-steps-both-in-ctx
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (let [chain [(assoc base-step :id "a")
                  (assoc base-step :id "b" :deps ["a"])]
           ctx   (graph chain {} {})]
@@ -58,7 +58,7 @@
 
 (deftest test-execute-graph-url-interpolation-from-args
   (let [captured (atom nil)]
-    (with-redefs [http/call (fn [{:keys [url]}]
+    (with-redefs [http/call (fn [_ {:keys [url]}]
                               (reset! captured url)
                               (http/ok {}))]
       (graph [(assoc base-step :id "s" :url "http://api/{userId}")] {:userId "u99"} {})
@@ -66,7 +66,7 @@
 
 (deftest test-execute-graph-url-interpolation-from-chain-ctx
   (let [calls (atom [])]
-    (with-redefs [http/call (fn [{:keys [url]}]
+    (with-redefs [http/call (fn [_ {:keys [url]}]
                               (swap! calls conj url)
                               (http/ok {:token "abc123"}))]
       (graph [(assoc base-step :id "fetch")
@@ -75,12 +75,12 @@
       (is (= "http://api/abc123" (second @calls))))))
 
 (deftest test-execute-graph-critical-failure-throws
-  (with-redefs [http/call (fn [_] (http/err :not-found "404"))]
+  (with-redefs [http/call (fn [_ _] (http/err :not-found "404"))]
     (is (thrown? clojure.lang.ExceptionInfo
                  (graph [(assoc base-step :id "s" :critical true)] {} {})))))
 
 (deftest test-execute-graph-critical-failure-ex-data-has-step
-  (with-redefs [http/call (fn [_] (http/err :not-found "404"))]
+  (with-redefs [http/call (fn [_ _] (http/err :not-found "404"))]
     (try
       (graph [(assoc base-step :id "s" :critical true)] {} {})
       (is false "should have thrown")
@@ -88,13 +88,13 @@
         (is (= "s" (:step (ex-data e))))))))
 
 (deftest test-execute-graph-non-critical-failure-captured-in-ctx
-  (with-redefs [http/call (fn [_] (http/err :timeout "timeout"))]
+  (with-redefs [http/call (fn [_ _] (http/err :timeout "timeout"))]
     (is (= :error (get-in (graph [(assoc base-step :id "s")] {} {})
                           [:s :status])))))
 
 (deftest test-execute-graph-mixed-ok-and-error
   (let [responses {:a (http/ok {:x 1}) :b (http/err :timeout "timeout")}]
-    (with-redefs [http/call (fn [{:keys [step-id]}]
+    (with-redefs [http/call (fn [_ {:keys [step-id]}]
                               (get responses step-id (http/ok {})))]
       (let [ctx (graph [(assoc base-step :id "a")
                         (assoc base-step :id "b" :deps ["a"])]
@@ -107,37 +107,37 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest test-run-endpoint-empty-output-mapping-returns-empty-data
-  (with-redefs [http/call (fn [_] (http/ok {:x 1}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {:x 1}))]
     (let [{:keys [data errors]} (run base-endpoint {} {})]
       (is (= {} data))
       (is (empty? errors)))))
 
 (deftest test-run-endpoint-output-from-args
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (let [endpoint (assoc base-endpoint :output_mapping {:echo {:source "args" :key "input"}})
           {:keys [data]} (run endpoint {:input "hello"} {})]
       (is (= "hello" (:echo data))))))
 
 (deftest test-run-endpoint-output-from-value-literal
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (let [endpoint (assoc base-endpoint :output_mapping {:ver {:source "value" :value "2.0"}})
           {:keys [data]} (run endpoint {} {})]
       (is (= "2.0" (:ver data))))))
 
 (deftest test-run-endpoint-output-from-request-ctx
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (let [endpoint (assoc base-endpoint :output_mapping {:rid {:source "ctx" :key "x-request-id"}})
           {:keys [data]} (run endpoint {} {:x-request-id "req-99"})]
       (is (= "req-99" (:rid data))))))
 
 (deftest test-run-endpoint-output-from-step-plain-key
-  (with-redefs [http/call (fn [_] (http/ok {:user-id "u1"}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {:user-id "u1"}))]
     (let [endpoint (assoc base-endpoint :output_mapping {:userId {:source "step" :step_id "s" :key "user-id"}})
           {:keys [data]} (run endpoint {} {})]
       (is (= "u1" (:userId data))))))
 
 (deftest test-run-endpoint-output-from-step-jq
-  (with-redefs [http/call (fn [_] (http/ok {:profile {:name "Bob"}}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {:profile {:name "Bob"}}))]
     (let [endpoint (assoc base-endpoint
                           :output_mapping {:name {:source "step" :step_id "s"
                                                   :jq ".profile.name"
@@ -146,7 +146,7 @@
       (is (= "Bob" (:name data))))))
 
 (deftest test-run-endpoint-unresolvable-step-field-is-nil
-  (with-redefs [http/call (fn [_] (http/err :not-found "404"))]
+  (with-redefs [http/call (fn [_ _] (http/err :not-found "404"))]
     (let [endpoint (assoc base-endpoint :output_mapping {:id {:source "step" :step_id "s" :key "id"}})
           {:keys [data]} (run endpoint {} {})]
       (is (nil? (:id data))))))
@@ -156,18 +156,18 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest test-run-endpoint-step-error-in-errors
-  (with-redefs [http/call (fn [_] (http/err :not-found "404"))]
+  (with-redefs [http/call (fn [_ _] (http/err :not-found "404"))]
     (let [{:keys [errors]} (run base-endpoint {} {})]
       (is (= 1 (count errors)))
       (is (= :not-found (get-in (first errors) [:extensions :code]))))))
 
 (deftest test-run-endpoint-error-step-name-in-extensions
-  (with-redefs [http/call (fn [_] (http/err :timeout "timeout"))]
+  (with-redefs [http/call (fn [_ _] (http/err :timeout "timeout"))]
     (let [{:keys [errors]} (run base-endpoint {} {})]
       (is (= "s" (get-in (first errors) [:extensions :step]))))))
 
 (deftest test-run-endpoint-success-has-empty-errors
-  (with-redefs [http/call (fn [_] (http/ok {:x 1}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {:x 1}))]
     (let [{:keys [errors]} (run base-endpoint {} {})]
       (is (empty? errors)))))
 
@@ -178,7 +178,7 @@
 (deftest test-request-ctx-headers-forwarded-to-backend
   (testing "keys in request-ctx are forwarded as headers to backend calls"
     (let [captured (atom nil)]
-      (with-redefs [http/call (fn [{:keys [headers]}]
+      (with-redefs [http/call (fn [_ {:keys [headers]}]
                                 (reset! captured headers)
                                 (http/ok {}))]
         (graph [(assoc base-step :id "s")]
@@ -190,7 +190,7 @@
 (deftest test-remote-addr-forwarded-to-backend
   (testing "remote-addr from request-ctx is forwarded as a header"
     (let [captured (atom nil)]
-      (with-redefs [http/call (fn [{:keys [headers]}]
+      (with-redefs [http/call (fn [_ {:keys [headers]}]
                                 (reset! captured headers)
                                 (http/ok {}))]
         (graph [(assoc base-step :id "s")] {} {:remote-addr "1.2.3.4"})
@@ -199,7 +199,7 @@
 (deftest test-nil-ctx-values-not-forwarded-as-headers
   (testing "nil ctx values are dropped before forwarding"
     (let [captured (atom nil)]
-      (with-redefs [http/call (fn [{:keys [headers]}]
+      (with-redefs [http/call (fn [_ {:keys [headers]}]
                                 (reset! captured headers)
                                 (http/ok {}))]
         (graph [(assoc base-step :id "s")]
@@ -210,7 +210,7 @@
 (deftest test-step-extra-headers-merged-with-ctx-headers
   (testing "extra_headers on a step are merged with forwarded request-ctx headers"
     (let [captured (atom nil)]
-      (with-redefs [http/call (fn [{:keys [headers]}]
+      (with-redefs [http/call (fn [_ {:keys [headers]}]
                                 (reset! captured headers)
                                 (http/ok {}))]
         (graph [(assoc base-step :id "s" :extra_headers {"x-service-key" "secret"})]
@@ -223,7 +223,7 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest test-transformer-registered-by-key-is-called
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (let [endpoint (assoc base-endpoint :transformer {:key "test-add-flag"})
           {:keys [data]} (run-with-exts endpoint {} {}
                            {:transformers {"test-add-flag" (fn [_ _ m] (assoc m :flag true))}})]
@@ -231,7 +231,7 @@
 
 (deftest test-transformer-receives-args-and-chain-ctx
   (let [received (atom nil)]
-    (with-redefs [http/call (fn [_] (http/ok {}))]
+    (with-redefs [http/call (fn [_ _] (http/ok {}))]
       (run-with-exts
         (assoc base-endpoint :transformer {:key "test-capture"})
         {:userId "u1"} {}
@@ -242,13 +242,13 @@
       (is (contains? (:chain-ctx @received) :s)))))
 
 (deftest test-transformer-unknown-key-throws
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (is (thrown? clojure.lang.ExceptionInfo
                  (run (assoc base-endpoint :transformer {:key "definitely-not-registered"})
                       {} {})))))
 
 (deftest test-transformer-unknown-key-ex-data-has-key
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (try
       (run (assoc base-endpoint :transformer {:key "definitely-not-registered-2"}) {} {})
       (is false "should have thrown")
@@ -256,7 +256,7 @@
         (is (= "definitely-not-registered-2" (:key (ex-data e))))))))
 
 (deftest test-transformer-ns-fn-form-resolves-and-calls
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (let [endpoint (assoc base-endpoint
                           :transformer {:ns "bff.executor-test" :fn "test-transformer-fn"})
           {:keys [data]} (run endpoint {} {})]
@@ -266,20 +266,20 @@
   (testing "a protocol implementation works as a transformer"
     (let [impl (reify executor/BffTransformer
                  (transform [_ _ _ m] (assoc m :via-protocol true)))]
-      (with-redefs [http/call (fn [_] (http/ok {}))]
+      (with-redefs [http/call (fn [_ _] (http/ok {}))]
         (let [endpoint (assoc base-endpoint :transformer {:key "test-protocol-impl"})
               {:keys [data]} (run-with-exts endpoint {} {}
                                {:transformers {"test-protocol-impl" impl}})]
           (is (true? (:via-protocol data))))))))
 
 (deftest test-no-transformer-returns-mapped-output-unchanged
-  (with-redefs [http/call (fn [_] (http/ok {}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {}))]
     (let [endpoint (assoc base-endpoint :output_mapping {:v {:source "value" :value 42}})
           {:keys [data]} (run endpoint {} {})]
       (is (= 42 (:v data))))))
 
 (deftest test-run-endpoint-nested-output-mapping
-  (with-redefs [http/call (fn [_] (http/ok {:name "Bob" :city "NY"}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {:name "Bob" :city "NY"}))]
     (let [endpoint (assoc base-endpoint
                           :output_mapping
                           {:profile {:name     {:source "step" :step_id "s" :key "name"}
@@ -298,7 +298,7 @@
 
 (deftest test-resolver-key-bypasses-backend-chain
   (let [called (atom false)]
-    (with-redefs [http/call (fn [_] (reset! called true) (http/ok {}))]
+    (with-redefs [http/call (fn [_ _] (reset! called true) (http/ok {}))]
       (run-with-exts {:resolver {:key "test-bypass"}} {} {}
                      {:resolvers {"test-bypass" (fn [_ _] {:data {:ok true} :errors []})}})
       (is (false? @called) "backend chain must not be called when resolver is present"))))
@@ -358,7 +358,7 @@
                (transform [_ args _chain _mapped]
                  (reset! seen args)
                  (doto (java.util.HashMap.) (.put "flag" true))))]
-    (with-redefs [http/call (fn [_] (http/ok {}))]
+    (with-redefs [http/call (fn [_ _] (http/ok {}))]
       (let [{:keys [data]} (run-with-exts
                              (assoc base-endpoint :transformer {:key "test-java-transformer"})
                              {:userId "u1"} {}
@@ -374,7 +374,7 @@
                  (transform [_ _args chain-ctx mapped]
                    (reset! seen chain-ctx)
                    mapped))]
-      (with-redefs [http/call (fn [_] (http/ok {}))]
+      (with-redefs [http/call (fn [_ _] (http/ok {}))]
         (run-with-exts
           (assoc base-endpoint :transformer {:key "test-java-chain"})
           {} {}
@@ -415,7 +415,7 @@
 
 (deftest test-resolver-as-step-feeds-downstream-output-mapping
   (testing "a resolver embedded as a chain step exposes :data to output_mapping"
-    (with-redefs [http/call (fn [_] (http/ok {:speeds [10.0 20.0 30.0]}))]
+    (with-redefs [http/call (fn [_ _] (http/ok {:speeds [10.0 20.0 30.0]}))]
       (let [compute (fn [args _ctx]
                       {:data   {:mean (/ (reduce + (:speeds args)) (count (:speeds args)))
                                 :n    (count (:speeds args))}
@@ -442,7 +442,7 @@
 
 (deftest test-resolver-as-step-errors-surface-through-chain
   (testing "resolver returning errors marks the step failed and surfaces the error"
-    (with-redefs [http/call (fn [_] (http/ok {:x 1}))]
+    (with-redefs [http/call (fn [_ _] (http/ok {:x 1}))]
       (let [bad (fn [_args _ctx]
                   {:data nil :errors [{:message "boom"}]})
             endpoint {:backend_chain
@@ -457,7 +457,7 @@
                              {:resolvers {"bad-resolver" bad}})))))))
 
 (deftest test-run-endpoint-nested-output-mapping-with-jq
-  (with-redefs [http/call (fn [_] (http/ok {:user {:id "u1" :score 99}}))]
+  (with-redefs [http/call (fn [_ _] (http/ok {:user {:id "u1" :score 99}}))]
     (let [endpoint (assoc base-endpoint
                           :output_mapping
                           {:summary {:userId {:source "step" :step_id "s"
@@ -469,3 +469,57 @@
           {:keys [data]} (run endpoint {} {})]
       (is (= "u1" (get-in data [:summary :userId])))
       (is (= 99   (get-in data [:summary :score]))))))
+
+;; ---------------------------------------------------------------------------
+;; :http-client extension routing
+;; ---------------------------------------------------------------------------
+
+(deftest test-http-client-ext-routes-through-injected-fn
+  (testing "an IFn on :http-client sees the executor's request and its response feeds the chain"
+    (let [seen   (atom nil)
+          client (fn [req]
+                   (reset! seen req)
+                   {:status 200 :body "{\"hello\":\"world\"}"})
+          endpoint (assoc base-endpoint
+                          :output_mapping
+                          {:hello {:source "step" :step_id "s"
+                                   :jq ".hello"
+                                   :compiled-jq (jq/compile-query ".hello")}})
+          {:keys [data errors]} (run-with-exts endpoint {} {} {:http-client client})]
+      (is (empty? errors))
+      (is (= "world" (:hello data)))
+      (is (= "http://test.example/api" (:url @seen)))
+      (is (= :get (:method @seen)))
+      (is (= :s (:step-id @seen))))))
+
+(deftest test-http-client-ext-error-status-triggers-step-error
+  (let [client (fn [_req] {:status 500 :body "{}"})
+        endpoint (assoc-in base-endpoint [:backend_chain 0 :critical] true)]
+    (is (thrown? clojure.lang.ExceptionInfo
+          (run-with-exts endpoint {} {} {:http-client client})))))
+
+(deftest test-http-client-ext-tagged-response-passes-through
+  (testing "a client returning an already-tagged {:status :ok ...} map is used as-is"
+    (let [client (fn [_req] (http/ok {:direct true}))
+          endpoint (assoc base-endpoint
+                          :output_mapping
+                          {:direct {:source "step" :step_id "s"
+                                    :jq ".direct"
+                                    :compiled-jq (jq/compile-query ".direct")}})
+          {:keys [data errors]} (run-with-exts endpoint {} {} {:http-client client})]
+      (is (empty? errors))
+      (is (true? (:direct data))))))
+
+(deftest test-http-client-ext-java-impl-routed
+  (testing "a Java BffHttpClient implementation is routed through the executor"
+    (let [impl (reify io.github.rthadani.bff.BffHttpClient
+                 (send [_ _req]
+                   (io.github.rthadani.bff.BffHttpClient$Response. 200 "{\"from\":\"java\"}")))
+          endpoint (assoc base-endpoint
+                          :output_mapping
+                          {:from {:source "step" :step_id "s"
+                                  :jq ".from"
+                                  :compiled-jq (jq/compile-query ".from")}})
+          {:keys [data errors]} (run-with-exts endpoint {} {} {:http-client impl})]
+      (is (empty? errors))
+      (is (= "java" (:from data))))))

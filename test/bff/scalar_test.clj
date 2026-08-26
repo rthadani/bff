@@ -78,7 +78,7 @@
         schema   (sb/build-schema with-datetime-spec
                                   {:scalars {"DateTime" scalar/date-time}})]
     (with-redefs [executor/run-endpoint
-                  (fn [_ args _ _]
+                  (fn [_ args _ _ _]
                     (reset! received args)
                     (m/sp {:data {:when (:when args)} :errors []}))]
       (lacinia/execute schema
@@ -91,7 +91,7 @@
   (let [schema (sb/build-schema with-datetime-spec
                                 {:scalars {"DateTime" scalar/date-time}})]
     (with-redefs [executor/run-endpoint
-                  (fn [_ args _ _]
+                  (fn [_ args _ _ _]
                     (m/sp {:data {:when (java.time.Instant/parse "2026-07-30T18:00:00Z")}
                            :errors []}))]
       (let [result (lacinia/execute schema

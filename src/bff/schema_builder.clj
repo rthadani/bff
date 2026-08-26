@@ -4,6 +4,7 @@
             [bff.scalar :as scalar]
             [com.walmartlabs.lacinia.schema :as schema]
             [com.walmartlabs.lacinia.resolve :as resolve]
+            [com.walmartlabs.lacinia.selection :as selection]
             [clojure.string :as str]))
 
 (defn- parse-type-str
@@ -124,12 +125,21 @@
     {:message    (:message e)
      :extensions with-code}))
 
+(defn- selected-field-names [ctx]
+  (when-let [sel (:com.walmartlabs.lacinia/selection ctx)]
+    (->> (selection/selections sel)
+         (keep (fn [s]
+                 (when (= :field (selection/selection-kind s))
+                   (selection/alias-name s))))
+         set)))
+
 (defn- make-resolver
   [endpoint extensions]
   (fn [ctx args _val]
-    (let [request-ctx (or (:request ctx) {})
+    (let [request-ctx     (or (:request ctx) {})
+          selected-fields (or (selected-field-names ctx) #{})
           {:keys [data errors]}
-          (run-task-sync (executor/run-endpoint endpoint args request-ctx extensions))]
+          (run-task-sync (executor/run-endpoint endpoint args request-ctx extensions selected-fields))]
       (if (seq errors)
         ;; Surface partial errors while still returning available data
         (resolve/resolve-as data (map error->graphql errors))

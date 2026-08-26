@@ -90,7 +90,7 @@
 (deftest test-resolver-code-lifted-into-extensions
   (let [schema (sb/build-schema ping-spec)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ _ _ _]
+                  (fn [_ _ _ _ _]
                     (m/sp {:data nil
                            :errors [{:message "MAC in use" :code "MAC_ALREADY_MAPPED"}]}))]
       (let [result (lacinia/execute schema "{ ping { message } }" {} {})]
@@ -102,7 +102,7 @@
 (deftest test-resolver-explicit-extensions-preserved
   (let [schema (sb/build-schema ping-spec)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ _ _ _]
+                  (fn [_ _ _ _ _]
                     (m/sp {:data nil
                            :errors [{:message "boom"
                                      :extensions {:code "X" :retryable true}}]}))]
@@ -113,7 +113,7 @@
 (deftest test-resolver-top-level-code-does-not-overwrite-explicit-extensions
   (let [schema (sb/build-schema ping-spec)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ _ _ _]
+                  (fn [_ _ _ _ _]
                     (m/sp {:data nil
                            :errors [{:message "boom"
                                      :code       "TOP_LEVEL"
@@ -124,7 +124,7 @@
 (deftest test-resolver-error-without-code-still-surfaces-message
   (let [schema (sb/build-schema ping-spec)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ _ _ _]
+                  (fn [_ _ _ _ _]
                     (m/sp {:data nil :errors [{:message "just a message"}]}))]
       (let [result (lacinia/execute schema "{ ping { message } }" {} {})]
         (is (= "just a message" (-> result :errors first :message)))))))

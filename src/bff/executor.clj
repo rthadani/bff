@@ -217,21 +217,48 @@
             err
             (http/ok (mapv :data results))))))))
 
+(defn- compute-needed-steps
+  "Returns the set of step ids that must run given the client's selected output
+   fields. Steps not in step-output-fields (pure deps / side effects) always
+   run. Expands transitively so dep steps of needed steps are included."
+  [chain step-output-fields selected-fields]
+  (let [step-map (into {} (map (fn [s] [(:id s) s]) chain))
+        direct   (->> chain
+                      (filter (fn [s]
+                                (let [fields (get step-output-fields (:id s))]
+                                  (or (empty? fields)
+                                      (some selected-fields fields)))))
+                      (map :id)
+                      set)
+        expand   (fn [step-id]
+                   (loop [needed #{step-id}
+                          queue  (vec (get-in step-map [step-id :deps]))]
+                     (if (empty? queue)
+                       needed
+                       (let [dep (first queue)]
+                         (if (contains? needed dep)
+                           (recur needed (next queue))
+                           (recur (conj needed dep)
+                                  (into (next queue)
+                                        (get-in step-map [dep :deps]))))))))]
+    (into #{} (mapcat expand direct))))
+
 (defn- step->task
   "Run one step against an immutable chain-ctx. Returns a map with the step's
-   result, or nil if the step was skipped by its :condition.
+   result, or nil if the step was skipped by its :condition or selection set.
 
      {:step-id      :keyword
       :result       {:status :ok/:error ...}
       :compensation {...}}      ; only present when the step succeeded and
                                 ;   declared a :compensation config"
-  [step args chain-ctx request-ctx extensions]
+  [step args chain-ctx request-ctx extensions needed-steps]
   (m/sp
     (let [condition (:condition step)
-          skip?     (when condition
-                      (not (resolve-value condition args chain-ctx request-ctx)))]
+          skip?     (or (and needed-steps (not (contains? needed-steps (:id step))))
+                        (when condition
+                          (not (resolve-value condition args chain-ctx request-ctx))))]
       (if skip?
-        (log/debugf "Step [%s] skipped (condition false)" (name (keyword (:id step))))
+        (log/debugf "Step [%s] skipped" (name (keyword (:id step))))
         (let [raw    (if (:foreach step)
                        (m/? (execute-foreach-task step args chain-ctx request-ctx extensions))
                        (m/? (m/via m/blk
@@ -252,10 +279,10 @@
 (defn- execute-wave
   "Run every step in the wave in parallel and return a seq of step->task
    results with skipped (nil) entries removed."
-  [wave args chain-ctx request-ctx extensions]
+  [wave args chain-ctx request-ctx extensions needed-steps]
   (apply m/join
          (fn [& results] (into [] (filter some?) results))
-         (map #(step->task % args chain-ctx request-ctx extensions) wave)))
+         (map #(step->task % args chain-ctx request-ctx extensions needed-steps) wave)))
 
 (defn- run-compensations
   "Execute recorded compensations in reverse order. Each compensation is a
@@ -279,11 +306,14 @@
    Returns a task that resolves to the final chain-ctx map.
 
    `extensions` is the caller-owned map with :cache and :retry-hooks.
+   `needed-steps` is an optional set of step ids to run; nil means run all.
 
    Steps that succeed *and* declare a :compensation config are recorded;
    if a later critical step fails, the recorded compensations run in
    reverse order before the failure is re-thrown to the caller."
-  [chain args request-ctx extensions]
+  ([chain args request-ctx extensions]
+   (execute-graph chain args request-ctx extensions nil))
+  ([chain args request-ctx extensions needed-steps]
   (let [waves          (graph/execution-waves chain)
         critical-steps (keep (fn [s] (when (:critical s) (:id s))) chain)]
     (log/debugf "Execution plan: %s" (graph/wave-summary waves))
@@ -293,7 +323,7 @@
              compensations []]
         (if (empty? remaining)
           chain-ctx
-          (let [results       (m/? (execute-wave (first remaining) args chain-ctx request-ctx extensions))
+          (let [results       (m/? (execute-wave (first remaining) args chain-ctx request-ctx extensions needed-steps))
                 chain-ctx     (into chain-ctx
                                     (map (juxt :step-id :result))
                                     results)
@@ -307,7 +337,7 @@
               (catch clojure.lang.ExceptionInfo e
                 (run-compensations compensations args chain-ctx request-ctx extensions)
                 (throw e)))
-            (recur (rest remaining) chain-ctx compensations)))))))
+            (recur (rest remaining) chain-ctx compensations))))))))
 
 (defn- apply-output-mapping
   [output-mapping args chain-ctx request-ctx]
@@ -384,9 +414,16 @@
    ...}); it runs like any other step and its :data becomes the step's
    output. Partial failures are represented in :errors while :data contains
    whatever fields could be resolved from successful steps."
-  [endpoint args request-ctx extensions]
+  ([endpoint args request-ctx extensions]
+   (run-endpoint endpoint args request-ctx extensions #{}))
+  ([endpoint args request-ctx extensions selected-fields]
   (m/sp
-    (let [request-ctx (enricher/enrich-ctx request-ctx (:enrichers extensions))]
+    (let [request-ctx (enricher/enrich-ctx request-ctx (:enrichers extensions))
+          chain       (:backend_chain endpoint)
+          needed-steps (when (seq selected-fields)
+                         (compute-needed-steps chain
+                                               (:step-output-fields endpoint)
+                                               selected-fields))]
       (if-let [val-errors (validator/run-validation endpoint args request-ctx
                                                     (:validators extensions))]
         (do (log/warnf "Validation failed: %s" (mapv :message val-errors))
@@ -396,10 +433,11 @@
                                                    (:resolvers extensions)
                                                    "resolver")
                             args request-ctx)
-          (let [chain-ctx (m/? (execute-graph (:backend_chain endpoint)
+          (let [chain-ctx (m/? (execute-graph chain
                                               args
                                               request-ctx
-                                              extensions))
+                                              extensions
+                                              needed-steps))
                 errors    (error/step-errors chain-ctx)
                 mapped    (apply-output-mapping (:output_mapping endpoint)
                                                 args
@@ -411,4 +449,4 @@
                                              mapped
                                              (:transformers extensions))]
             {:data   final
-             :errors errors}))))))
+             :errors errors})))))))

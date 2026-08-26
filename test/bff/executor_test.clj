@@ -510,6 +510,64 @@
       (is (empty? errors))
       (is (true? (:direct data))))))
 
+;; ---------------------------------------------------------------------------
+;; run-endpoint — selection-based step skipping
+;; ---------------------------------------------------------------------------
+
+(defn- run-with-selection [endpoint args ctx selected-fields]
+  (run-sync! (executor/run-endpoint endpoint args ctx {} selected-fields)))
+
+(deftest test-selection-skip-unneeded-step
+  (let [calls     (atom #{})
+        endpoint  {:step-output-fields {"name-step" #{:name}
+                                        "age-step"  #{:age}}
+                   :backend_chain      [{:id "name-step" :url "http://api/name" :method "GET" :deps []}
+                                        {:id "age-step"  :url "http://api/age"  :method "GET" :deps []}]
+                   :output_mapping     {:name {:source "step" :step_id "name-step" :jq ".name"
+                                               :compiled-jq (jq/compile-query ".name")}
+                                        :age  {:source "step" :step_id "age-step" :jq ".age"
+                                               :compiled-jq (jq/compile-query ".age")}}}]
+    (with-redefs [http/call (fn [_ {:keys [url]}]
+                              (swap! calls conj url)
+                              (if (clojure.string/includes? url "name")
+                                (http/ok {:name "alice"})
+                                (http/ok {:age 30})))]
+      (let [{:keys [data errors]} (run-with-selection endpoint {} {} #{:name})]
+        (is (empty? errors))
+        (is (= "alice" (:name data)))
+        (is (nil? (:age data)))
+        (is (contains? @calls "http://api/name") "name-step ran")
+        (is (not (contains? @calls "http://api/age")) "age-step was skipped")))))
+
+(deftest test-selection-skip-dep-of-needed-step-still-runs
+  (let [calls    (atom #{})
+        endpoint {:step-output-fields {"dep-step"    #{}
+                                       "result-step" #{:result}}
+                  :backend_chain      [{:id "dep-step"    :url "http://api/dep"    :method "GET" :deps []}
+                                       {:id "result-step" :url "http://api/result" :method "GET" :deps ["dep-step"]}]
+                  :output_mapping     {:result {:source "step" :step_id "result-step" :jq ".result"
+                                                :compiled-jq (jq/compile-query ".result")}}}]
+    (with-redefs [http/call (fn [_ {:keys [url]}]
+                              (swap! calls conj url)
+                              (http/ok {:result "ok"}))]
+      (let [{:keys [errors]} (run-with-selection endpoint {} {} #{:result})]
+        (is (empty? errors))
+        (is (contains? @calls "http://api/dep")    "dep-step ran because result-step needs it")
+        (is (contains? @calls "http://api/result") "result-step ran")))))
+
+(deftest test-selection-empty-set-runs-all-steps
+  (let [calls    (atom #{})
+        endpoint {:step-output-fields {"a" #{:foo} "b" #{:bar}}
+                  :backend_chain      [{:id "a" :url "http://api/a" :method "GET" :deps []}
+                                       {:id "b" :url "http://api/b" :method "GET" :deps []}]
+                  :output_mapping     {}}]
+    (with-redefs [http/call (fn [_ {:keys [url]}]
+                              (swap! calls conj url)
+                              (http/ok {}))]
+      (run-with-selection endpoint {} {} #{})
+      (is (contains? @calls "http://api/a"))
+      (is (contains? @calls "http://api/b")))))
+
 (deftest test-http-client-ext-java-impl-routed
   (testing "a Java BffHttpClient implementation is routed through the executor"
     (let [impl (reify io.github.rthadani.bff.BffHttpClient

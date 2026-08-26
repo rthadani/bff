@@ -101,6 +101,31 @@
       (update :compensation  compile-compensation)
       (cond-> (:foreach step) (update :foreach compile-mapping-entry))))
 
+(defn- collect-step-ids
+  "Recursively collect all step_id values referenced in a mapping subtree."
+  [m]
+  (cond
+    (not (map? m)) #{}
+    (:source m)    (let [src (:source m)]
+                     (if (or (= src "step") (= src :step))
+                       (when-let [sid (:step_id m)] #{sid})
+                       #{}))
+    :else          (into #{} (mapcat collect-step-ids (vals m)))))
+
+(defn- build-step-output-fields
+  "Returns a map of step-id (string) to the set of top-level output field
+   names (keywords) that read from it. Steps not referenced by any field
+   are absent from the map."
+  [endpoint]
+  (reduce
+    (fn [acc [top-field field-def]]
+      (reduce (fn [a sid]
+                (update a sid (fnil conj #{}) (keyword top-field)))
+              acc
+              (collect-step-ids field-def)))
+    {}
+    (:output_mapping endpoint)))
+
 (defn- preload-transformer! [transformer]
   (when (and transformer (:ns transformer))
     (require (symbol (:ns transformer)))))
@@ -108,6 +133,7 @@
 (defn- compile-endpoint [endpoint]
   (preload-transformer! (:transformer endpoint))
   (-> endpoint
+      (assoc :step-output-fields (build-step-output-fields endpoint))
       (update :backend_chain #(mapv compile-step %))
       (update :output_mapping compile-output-map)))
 

@@ -252,7 +252,7 @@
 
 (deftest test-resolver-returns-executor-data
   (let [schema (sb/build-schema ping-spec)]
-    (with-redefs [executor/run-endpoint (fn [_ _ _ _] (m/sp {:data {:message "pong"} :errors []}))]
+    (with-redefs [executor/run-endpoint (fn [_ _ _ _ _] (m/sp {:data {:message "pong"} :errors []}))]
       (let [result (lacinia/execute schema "{ ping { message } }" {} {})]
         (is (nil? (:errors result)))
         (is (= "pong" (get-in result [:data :ping :message])))))))
@@ -260,7 +260,7 @@
 (deftest test-resolver-surfaces-step-errors
   (let [schema (sb/build-schema ping-spec)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ _ _ _]
+                  (fn [_ _ _ _ _]
                     (m/sp {:data   nil
                            :errors [{:message    "step failed"
                                      :extensions {:code :not-found :step "s"}}]}))]
@@ -272,28 +272,31 @@
   (let [schema        (sb/build-schema full-spec)
         received-args (atom nil)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ args _ _]
+                  (fn [_ args _ _ _]
                     (reset! received-args args)
                     (m/sp {:data {:id "u1" :name nil} :errors []}))]
       (lacinia/execute schema "{ getUser(userId: \"u1\") { id } }" {} {})
       (is (= {:userId "u1"} @received-args)))))
 
 (deftest test-resolver-passes-request-ctx-to-executor
-  (let [schema   (sb/build-schema ping-spec)
-        received (atom nil)]
+  (let [schema    (sb/build-schema ping-spec)
+        received  (atom nil)
+        sel-fields (atom nil)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ _ request-ctx _]
+                  (fn [_ _ request-ctx _ selected-fields]
                     (reset! received request-ctx)
+                    (reset! sel-fields selected-fields)
                     (m/sp {:data {:message "ok"} :errors []}))]
       (lacinia/execute schema "{ ping { message } }" {} {:request {:authorization "Bearer tok"}})
-      (is (= {:authorization "Bearer tok"} @received)))))
+      (is (= {:authorization "Bearer tok"} @received))
+      (is (set? @sel-fields)))))
 
 (deftest test-build-schema-passes-extensions-to-run-endpoint
   (let [schema     (sb/build-schema ping-spec
                                     {:validators {"my-validator" (fn [_ _] nil)}})
         received-exts (atom nil)]
     (with-redefs [executor/run-endpoint
-                  (fn [_ _ _ extensions]
+                  (fn [_ _ _ extensions _]
                     (reset! received-exts extensions)
                     (m/sp {:data {:message "ok"} :errors []}))]
       (lacinia/execute schema "{ ping { message } }" {} {})

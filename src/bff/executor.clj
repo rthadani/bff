@@ -38,7 +38,7 @@
           (get data (keyword (:key mapping))))))
 
     :value
-    (:value mapping)
+    (maybe-jq mapping (:value mapping))
 
     :ctx
     (maybe-jq mapping (get request-ctx (keyword (:key mapping))))

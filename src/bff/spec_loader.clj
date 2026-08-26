@@ -98,7 +98,8 @@
   (-> step
       (update :input_mapping compile-param-map)
       (update :body_mapping  compile-param-map)
-      (update :compensation  compile-compensation)))
+      (update :compensation  compile-compensation)
+      (cond-> (:foreach step) (update :foreach compile-mapping-entry))))
 
 (defn- preload-transformer! [transformer]
   (when (and transformer (:ns transformer))

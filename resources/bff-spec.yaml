@@ -2,6 +2,7 @@
 # Full example showing:
 #   - Query with parallel fan-out (no deps between steps)
 #   - Mutation with sequential chain + parallel tail
+#   - Foreach fan-out over a list of IDs
 #   - jq output mappings (nested, arrays, conditionals)
 #   - Critical steps that abort the chain on failure
 #   - Optional steps conditioned on args
@@ -12,6 +13,8 @@
 
 # Base URL for upstream services. Set API_BASE_URL to point at each environment.
 #   API_BASE_URL=https://api.prod.internal clj -M -m bff.core
+#
+# Debug logging — set BFF_LOG_LEVEL=debug to see per-step request/response details.
 
 # Headers forwarded to every backend step.
 # Defaults to [authorization, x-request-id, x-correlation-id] if omitted.
@@ -33,6 +36,13 @@ input_types:
       sku:      String!
       quantity: Int!
       price:    Float!
+
+output_types:
+  - name: EquipmentDetail
+    fields:
+      id:     String!
+      name:   String
+      status: String
 
 endpoints:
   - name: userDashboard
@@ -125,7 +135,7 @@ endpoints:
         verifiedLabel:
           source: step
           step_id: fetch_profile
-          jq: "if .data.verified then \"✓ Verified\" else null end"
+          jq: "if .data.verified then \"Verified\" else null end"
       preferences:
         theme:
           source: step
@@ -271,3 +281,37 @@ endpoints:
     transformer:
       ns: bff.examples.transformers.orders
       fn: attach-warnings
+
+# foreach — fetch details for multiple equipment IDs in parallel
+  - name: equipmentBatch
+    type: query
+    description: "Fetch details for a list of equipment IDs in parallel"
+
+    args:
+      equipmentIds: { type: "[String!]!" }
+
+    output_type:
+      name: EquipmentBatch
+      fields:
+        equipment: "[EquipmentDetail]"
+        count:     Int
+
+    backend_chain:
+
+      - id: fetch_equipment
+        foreach:
+          source: args
+          key: equipmentIds
+          item_as: equipmentId
+        url: "${API_BASE_URL:-http://localhost:3001}/api/v1/equipment/{equipmentId}"
+        method: GET
+
+    output_mapping:
+      equipment:
+        source: step
+        step_id: fetch_equipment
+        jq: "."
+      count:
+        source: step
+        step_id: fetch_equipment
+        jq: "length"

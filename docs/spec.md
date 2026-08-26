@@ -283,14 +283,61 @@ The `before_retry` hook — see [extensions.md](extensions.md#retry-hook) — is
 called between attempts and can return a rewritten request-ctx (typically
 with a refreshed `Authorization` header).
 
+### Foreach fan-out
+
+Runs a step once per item in a collection. All iterations execute in parallel. The step result is an array of each iteration's response data, in input order. Fails on the first error.
+
+```yaml
+- id: fetch_equipment_details
+  foreach:
+    source: args
+    key: equipmentIds
+    item_as: equipmentId   # injected into args for each iteration
+  url: "http://equipment-svc/equipment/{equipmentId}"
+  method: GET
+```
+
+`item_as` is available in URL placeholders and `input_mapping`/`body_mapping` via `source: args`. The `foreach` source supports `jq` to transform the collection before iteration:
+
+```yaml
+foreach:
+  source: step
+  step_id: list_equipment
+  jq: "[.[].id]"
+  item_as: equipmentId
+```
+
+Output mapping receives the full array as the step's data:
+
+```yaml
+output_mapping:
+  equipment:
+    source: step
+    step_id: fetch_equipment_details
+    jq: "."
+  names:
+    source: step
+    step_id: fetch_equipment_details
+    jq: "[.[].name]"
+```
+
 ## Mapping sources
 
 | source  | Description                                      |
 |---------|--------------------------------------------------|
 | `args`  | GraphQL input argument (`key: argName`)          |
 | `step`  | Prior step's response data — use `jq` for paths  |
-| `value` | Hardcoded literal (`value: "foo"`)               |
+| `value` | Hardcoded literal (`value: "foo"` or a list)     |
 | `ctx`   | Request context — forwarded headers and remote-addr |
+
+All sources accept an optional `jq:` expression applied to the resolved value. `source: value` with `jq` is useful for transforming fixed lists:
+
+```yaml
+statuses:
+  source: value
+  value: [active, pending]
+  jq: ". | join(\",\")"
+```
 
 ## jq expressions
 

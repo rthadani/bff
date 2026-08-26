@@ -189,6 +189,34 @@
       (cond-> result mapped (assoc-in [:error :code] mapped)))
     result))
 
+(defn- execute-foreach-task
+  "Fan out a step across every item in a collection, running all calls in
+   parallel. Returns a missionary task resolving to a tagged result whose
+   :data is a vector of the individual :data values — one per item, in order.
+   Fails fast: the first error result becomes the step result."
+  [step args chain-ctx request-ctx extensions]
+  (let [foreach-cfg (:foreach step)
+        item-as     (keyword (:item_as foreach-cfg))
+        items       (resolve-value foreach-cfg args chain-ctx request-ctx)]
+    (log/infof "Step [%s] foreach over %d item(s)" (:id step) (count items))
+    (if (empty? items)
+      (m/sp (http/ok []))
+      (m/sp
+        (let [results (m/? (apply m/join
+                                  vector
+                                  (map (fn [item]
+                                         (m/via m/blk
+                                           (execute-step-with-retry
+                                             step
+                                             (assoc args item-as item)
+                                             chain-ctx
+                                             request-ctx
+                                             extensions)))
+                                       items)))]
+          (if-let [err (first (filter http/error? results))]
+            err
+            (http/ok (mapv :data results))))))))
+
 (defn- step->task
   "Run one step against an immutable chain-ctx. Returns a map with the step's
    result, or nil if the step was skipped by its :condition.
@@ -204,8 +232,10 @@
                       (not (resolve-value condition args chain-ctx request-ctx)))]
       (if skip?
         (log/debugf "Step [%s] skipped (condition false)" (name (keyword (:id step))))
-        (let [raw    (m/? (m/via m/blk
-                                 (execute-step-with-retry step args chain-ctx request-ctx extensions)))
+        (let [raw    (if (:foreach step)
+                       (m/? (execute-foreach-task step args chain-ctx request-ctx extensions))
+                       (m/? (m/via m/blk
+                                   (execute-step-with-retry step args chain-ctx request-ctx extensions))))
               mapped (apply-error-mapping step raw)
               result (if (= :ok (:status mapped))
                        (assoc mapped :node (jq/to-node (:data mapped)))

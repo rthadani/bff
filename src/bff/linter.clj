@@ -69,6 +69,15 @@
    [:body_mapping  {:optional true} [:map-of :any mapping-entry]]
    [:extra_headers {:optional true} [:map-of :any :string]]])
 
+(def ^:private foreach-schema
+  [:map {:closed true}
+   [:source             mapping-source]
+   [:key      {:optional true} :string]
+   [:step_id  {:optional true} :string]
+   [:jq       {:optional true} :string]
+   [:compiled-jq {:optional true} :any]
+   [:item_as  :string]])
+
 (def ^:private backend-step-schema
   [:and
    [:map {:closed true}
@@ -76,6 +85,7 @@
     [:url    {:optional true} :string]
     [:method {:optional true} http-method]
     [:resolver         {:optional true} extension-ref]
+    [:foreach          {:optional true} foreach-schema]
     [:deps             {:optional true} [:sequential :string]]
     [:critical         {:optional true} :boolean]
     [:condition        {:optional true} mapping-entry]
@@ -249,9 +259,13 @@
      :message  (str "references unknown step '" (:step_id entry) "'")
      :node     node}))
 
+(defn- foreach-item-as-names [endpoint]
+  (set (keep (comp :item_as :foreach) (:backend_chain endpoint))))
+
 (defn- check-arg-refs [spec]
   (for [[ei endpoint] (map-indexed vector (:endpoints spec))
-        :let [args (set (map name (keys (:args endpoint))))]
+        :let [args (into (set (map name (keys (:args endpoint))))
+                         (foreach-item-as-names endpoint))]
         [path entry node] (walk-endpoint-mappings ei endpoint)
         :when (and (source-eq? entry :args)
                    (not (contains? args (str (:key entry)))))]

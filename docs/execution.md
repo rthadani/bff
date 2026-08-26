@@ -52,6 +52,30 @@ side effect if the chain later fails. Semantics:
 See [spec.md — Compensation](spec.md#compensation) for the syntax and a full
 onboarding example.
 
+## Foreach fan-out
+
+A `foreach:` step fans out into N parallel calls via `m/join`. Retries and error mapping apply per-iteration. The step's entry in `chain-ctx` is a tagged ok/error whose `:data` is a vector of each iteration's response data in input order. Downstream steps and output mappings see it as any other step result.
+
+## Debugging
+
+Set `BFF_LOG_LEVEL` to control verbosity. Applied at `create-handler` time.
+
+```
+BFF_LOG_LEVEL=debug clj -M:demo
+```
+
+| Level   | Output                                                                |
+|---------|-----------------------------------------------------------------------|
+| `info`  | Step name, method, URL; retries; compensation (default)               |
+| `warn`  | Step failures; validation failures; compensation errors               |
+| `debug` | Request params, body, headers; response data; cache hits; skipped steps; enricher keys; error code remaps |
+
+Programmatic:
+
+```clojure
+(bff/set-log-level! :debug)
+```
+
 ## Error handling
 
 ### Partial failure response

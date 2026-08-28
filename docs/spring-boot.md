@@ -193,13 +193,4 @@ forwarded to every downstream HTTP step automatically. See
 `forward_headers` in the [spec reference](spec.md) if you need to widen or
 narrow that list.
 
-## Migrating from the register-*! API
-
-Before 0.2.0 extensions were registered globally via `Bff.registerValidator`,
-`Bff.registerCache`, etc. Those methods are gone. Replace each call with the
-corresponding builder method on `BffConfig.builder()` and pass the built
-config to `Bff.createHandler(spec, config)` or
-`Bff.createServlet(spec, config)`. The `bff.*/register-*!` Clojure functions
-and the process-wide atoms are also gone.
-
 See [extensions.md](extensions.md) for full documentation on each extension type.

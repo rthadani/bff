@@ -223,7 +223,11 @@
     (is (= 1 (count (linter/lint-spec spec))))))
 
 (deftest test-lint-file-against-demo-spec
-  (let [problems (linter/lint-file "resources/bff-spec.yaml")
+  (let [problems (linter/lint-file "resources/bff-spec.yaml")]
+    (is (empty? problems))))
+
+(deftest test-lint-file-missing-value-source
+  (let [problems (linter/lint-file "test/resources/lint-errors-spec.yaml")
         paths    (set (map :path problems))]
     (is (= 2 (count problems)))
     (is (contains? paths "endpoints[0].backend_chain[2].input_mapping.limit.source"))

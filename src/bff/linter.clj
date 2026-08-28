@@ -422,17 +422,33 @@
 (defn lint-file [path]
   (-> path slurp yaml/parse-string lint-spec))
 
+(defn- lint-and-print [path]
+  (let [problems (lint-file path)]
+    (when (seq problems)
+      (println (str "==> " path))
+      (doseq [p problems]
+        (println (format-problem p))
+        (println)))
+    problems))
+
+(defn- yaml-files-in-dir [dir]
+  (->> (file-seq (io/file dir))
+       (filter #(and (.isFile %)
+                     (re-find #"\.(yaml|yml)$" (.getName %))))
+       (sort-by #(.getPath %))))
+
 (defn -main [& args]
   (let [path (first args)]
     (when-not path
-      (println "usage: clj -M:lint <spec.yaml>")
+      (println "usage: clj -M:lint <spec.yaml|dir>")
       (System/exit 2))
-    (when-not (.exists (io/file path))
-      (println "not found:" path)
-      (System/exit 2))
-    (let [problems (lint-file path)]
-      (doseq [p problems]
-        (println (format-problem p))
-        (println))
-      (println (summary problems))
-      (System/exit (if (some #(= :error (:severity %)) problems) 1 0)))))
+    (let [f (io/file path)]
+      (when-not (.exists f)
+        (println "not found:" path)
+        (System/exit 2))
+      (let [files (if (.isDirectory f)
+                    (yaml-files-in-dir f)
+                    [f])
+            all-problems (mapcat #(lint-and-print (.getPath %)) files)]
+        (println (summary all-problems))
+        (System/exit (if (some #(= :error (:severity %)) all-problems) 1 0))))))

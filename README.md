@@ -78,7 +78,7 @@ curl -X POST http://localhost:8080 \
 - [Extensions](docs/extensions.md) — validators, transformers, resolvers, retry hooks, cache, HTTP client, in Clojure and Java
 - [Spring Boot 3](docs/spring-boot.md) — Jakarta servlet bridge and extension registration
 - [Clojure](docs/clojure.md) — Ring handler mounting and Buddy auth integration
-- [Internals](INTERNALS.md) — full request lifecycle, component interactions, extension points
+- [Internals](docs/INTERNALS.md) — full request lifecycle, component interactions, extension points
 
 ## Alternatives
 

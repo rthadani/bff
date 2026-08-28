@@ -112,6 +112,7 @@ endpoints:
             step_id: fetch_profile
             jq: ".data.internal_id"
           limit:
+            source: value
             value: 10
 
     output_mapping:
@@ -227,6 +228,7 @@ endpoints:
             source: args
             key: userId
           template:
+            source: value
             value: "order_confirmation"
           amount:
             source: step

@@ -1,0 +1,63 @@
+endpoints:
+  - name: userDashboard
+    type: query
+    output_type: UserDashboard
+    args:
+      userId:
+        type: String!
+    backend_chain:
+      - id: fetch_profile
+        url: "http://localhost:3001/api/v1/users/{userId}"
+        method: GET
+        input_mapping:
+          userId:
+            source: args
+            key: userId
+      - id: fetch_preferences
+        url: "http://localhost:3001/api/v1/preferences/{userId}"
+        method: GET
+        input_mapping:
+          userId:
+            source: args
+            key: userId
+      - id: fetch_activity
+        url: "http://localhost:3001/api/v1/activity"
+        method: GET
+        deps: [fetch_profile]
+        input_mapping:
+          limit:
+            value: 10    # missing source: value
+
+  - name: createOrder
+    type: mutation
+    output_type: OrderResult
+    args:
+      userId:
+        type: String!
+    backend_chain:
+      - id: create_order
+        url: "http://localhost:3001/api/v1/orders"
+        method: POST
+        body_mapping:
+          user_id:
+            source: args
+            key: userId
+      - id: notify_user
+        url: "http://localhost:3001/api/v1/notify"
+        method: POST
+        deps: [create_order]
+        body_mapping:
+          template:
+            value: "order_confirmation"    # missing source: value
+          amount:
+            source: step
+            step_id: create_order
+
+output_types:
+  - name: UserDashboard
+    fields:
+      userId: String
+
+  - name: OrderResult
+    fields:
+      orderId: String
